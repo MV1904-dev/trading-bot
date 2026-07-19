@@ -11,3 +11,6 @@ venv/
 
 # misc
 .DS_Store
+
+# generovane data (cache historie + vysledky backtestu)
+data/
