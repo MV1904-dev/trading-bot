@@ -331,9 +331,13 @@ class IBKRBroker:
         max_requests: int = 240,
         pause: float = 10.0,
         stop_at: Optional[datetime] = None,
+        end: Union[datetime, str] = "",
     ):
         """Walk backwards in time, one chunk per request, as deep as IBKR
         allows (or until ``stop_at`` / ``max_requests``).
+
+        ``end`` is where the walk starts (defaults to "now"); pass an earlier
+        datetime to back-fill history older than an existing cache.
 
         IBKR pacing: no more than 60 historical requests per 10 minutes, so we
         sleep ``pause`` seconds between calls (default 10s -> <=60 in 10 min).
@@ -345,7 +349,6 @@ class IBKRBroker:
         stop_at = _as_utc(stop_at) if stop_at else None
 
         frames = []
-        end: Union[datetime, str] = ""
         prev_earliest: Optional[datetime] = None
 
         for i in range(max_requests):
@@ -416,12 +419,23 @@ class IBKRBroker:
             last = _as_utc(existing["date"].max().to_pydatetime())
             log.info("Cache %s: %d rows, last bar %s -> incremental update.",
                      path.name, len(existing), last.isoformat())
-            fresh = self.history_deep(
+            frames = [existing]
+            frames.append(self.history_deep(
                 contract, bar_size=bar_size, what_to_show=what_to_show,
                 use_rth=use_rth, stop_at=last, **deep_kwargs,
-            )
+            ))
+            if deep:
+                # Also extend the cache *backwards*: a cache started with
+                # deep=False would otherwise never reach older history.
+                earliest = _as_utc(existing["date"].min().to_pydatetime())
+                log.info("Cache %s: back-filling older than %s.",
+                         path.name, earliest.isoformat())
+                frames.append(self.history_deep(
+                    contract, bar_size=bar_size, what_to_show=what_to_show,
+                    use_rth=use_rth, end=earliest, **deep_kwargs,
+                ))
             import pandas as pd
-            combined = pd.concat([existing, fresh], ignore_index=True)
+            combined = pd.concat(frames, ignore_index=True)
             df = _dedupe_sort(combined)
         elif deep:
             log.info("Cache %s: empty -> full deep back-fill.", path.name)
