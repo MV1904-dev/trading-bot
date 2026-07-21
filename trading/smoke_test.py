@@ -27,7 +27,7 @@ import argparse
 import logging
 import sys
 
-from trading.broker_ibkr import IBKRBroker, _bar_label
+from trading.broker_ibkr import CACHE_PREFIX, IBKRBroker, _bar_label
 
 
 def main(argv=None) -> int:
@@ -94,14 +94,25 @@ def main(argv=None) -> int:
         else:
             df = broker.history_cached(contract, bar_size=args.bar, deep=True)
 
-        if len(df):
-            print(f"  rows:  {len(df):,}")
-            print(f"  range: {df['date'].min()}  ..  {df['date'].max()}")
-            print(f"  saved: data/{args.pair}_{_bar_label(args.bar)}.csv")
-            print("\n  last 3 bars:")
-            print(df.tail(3).to_string(index=False))
-        else:
+        if not len(df):
             print("  no bars returned.")
+            print(f"\n✗ Smoke test FAILED: no {args.bar} history for "
+                  f"{args.pair}.", file=sys.stderr)
+            print("  Most likely a market-data entitlement problem (IBKR "
+                  "error 162 / 10089). Check that:", file=sys.stderr)
+            print("   - the Market Data API Acknowledgement form is signed,",
+                  file=sys.stderr)
+            print("   - market data is shared with the paper account,",
+                  file=sys.stderr)
+            print("   - IB Gateway was logged out and back in afterwards "
+                  "(entitlements load at login).", file=sys.stderr)
+            return 1
+
+        print(f"  rows:  {len(df):,}")
+        print(f"  range: {df['date'].min()}  ..  {df['date'].max()}")
+        print(f"  saved: data/{CACHE_PREFIX}{args.pair}_{_bar_label(args.bar)}.csv")
+        print("\n  last 3 bars:")
+        print(df.tail(3).to_string(index=False))
 
         print("\n✓ Smoke test complete.")
         return 0

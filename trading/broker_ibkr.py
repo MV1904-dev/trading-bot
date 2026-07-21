@@ -62,6 +62,12 @@ DEFAULT_CLIENT_ID = 17
 # Where cached CSV history lives. Repo-root ``data/`` by default; overridable.
 DEFAULT_DATA_DIR = Path(os.environ.get("IBKR_DATA_DIR", "data"))
 
+# Prefix for IBKR cache files. ``data/`` is shared with the XTB/alt-source
+# backtest cache, which uses the same ``<SYMBOL>_M5.csv`` name but a different
+# schema (ctm,datetime,... vs date,open,...). Without this prefix the two
+# overwrite each other.
+CACHE_PREFIX = "ibkr_"
+
 # Map a human "bar size" string to the short label used in cache filenames.
 _BAR_LABELS = {
     "1 secs": "S1", "5 secs": "S5", "10 secs": "S10", "15 secs": "S15",
@@ -427,10 +433,16 @@ class IBKRBroker:
             df = self.history(contract, bar_size=bar_size,
                               what_to_show=what_to_show, use_rth=use_rth)
 
+        # Never overwrite a good cache with an empty fetch (no permissions,
+        # market closed, pacing violation…): that silently destroys history.
+        if not len(df):
+            log.warning("Cache %s: fetch returned 0 rows -> keeping existing "
+                        "file untouched.", path.name)
+            return existing if existing is not None else df
+
         self._write_csv(path, df)
         log.info("Cache %s saved: %d rows (%s .. %s).", path.name, len(df),
-                 df["date"].min() if len(df) else "-",
-                 df["date"].max() if len(df) else "-")
+                 df["date"].min(), df["date"].max())
         return df
 
     # ------------------------------------------------------------------ #
@@ -438,7 +450,7 @@ class IBKRBroker:
     # ------------------------------------------------------------------ #
     def _cache_path(self, label: str, bar_size: str) -> Path:
         self.data_dir.mkdir(parents=True, exist_ok=True)
-        return self.data_dir / f"{label}_{_bar_label(bar_size)}.csv"
+        return self.data_dir / f"{CACHE_PREFIX}{label}_{_bar_label(bar_size)}.csv"
 
     def _write_csv(self, path: Path, df) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -455,7 +467,7 @@ class IBKRBroker:
         This is what the backtester calls: ``load_cached("EURUSD", "5 mins")``.
         Returns an empty DataFrame if the cache does not exist yet.
         """
-        path = Path(data_dir) / f"{label}_{_bar_label(bar_size)}.csv"
+        path = Path(data_dir) / f"{CACHE_PREFIX}{label}_{_bar_label(bar_size)}.csv"
         df = _read_csv(path)
         return df if df is not None else _empty_df()
 
