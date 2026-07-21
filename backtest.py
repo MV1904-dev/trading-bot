@@ -49,9 +49,14 @@ HISTORY_YEARS = 10                 # ako ďaleko dozadu žiadame (XTB vráti čo
 STARTING_CAPITAL = 10_000.0
 RISK_PCT = 0.01
 
-XTB_DEMO_URL = "wss://ws.xtb.com/demo"
+XTB_DEMO_URL = "wss://ws.xapi.pro/demo"  # ws.xtb.com vypnutý 2025-03-14
 CONNECT_TIMEOUT = 20
 API_PAUSE = 0.3
+# XTB odmietne getChartRangeRequest s príliš širokým rozsahom (EX009), preto
+# sťahujeme po oknách. Po niekoľkých prázdnych oknách za sebou končíme –
+# demo server drží len obmedzenú históriu (rádovo dni/týždne pri M5).
+CHUNK_DAYS = 80
+MAX_EMPTY_CHUNKS = 3
 
 
 # --- Sťahovanie a cache -----------------------------------------------------
@@ -146,12 +151,28 @@ def fetch_symbol(ws, symbol: str) -> tuple:
     }
 
     now_ms = int(time.time() * 1000)
-    start_ms = now_ms - HISTORY_YEARS * 365 * 24 * 3600 * 1000
-    chart = call("getChartRangeRequest", {"info": {
-        "period": PERIOD_MIN, "start": start_ms, "end": now_ms,
-        "symbol": symbol, "ticks": 0,
-    }})
-    candles = _candles_from_chart(chart)
+    oldest_ms = now_ms - HISTORY_YEARS * 365 * 24 * 3600 * 1000
+    chunk_ms = CHUNK_DAYS * 24 * 3600 * 1000
+
+    by_ctm: Dict[int, Candle] = {}
+    end = now_ms
+    empty_streak = 0
+    while end > oldest_ms and empty_streak < MAX_EMPTY_CHUNKS:
+        start = max(end - chunk_ms, oldest_ms)
+        chart = call("getChartRangeRequest", {"info": {
+            "period": PERIOD_MIN, "start": start, "end": end,
+            "symbol": symbol, "ticks": 0,
+        }})
+        chunk = _candles_from_chart(chart)
+        if chunk:
+            for c in chunk:
+                by_ctm[c.ctm] = c
+            empty_streak = 0
+        else:
+            empty_streak += 1
+        end = start
+
+    candles = sorted(by_ctm.values(), key=lambda c: c.ctm)
     return candles, meta
 
 

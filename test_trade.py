@@ -21,10 +21,13 @@ import time
 from datetime import datetime
 
 from dotenv import load_dotenv
-from websocket import create_connection, WebSocketException
+
+from xtb_socket import create_connection_demo, DEMO_HOSTS, DEMO_PORT
 
 # --- Konfigurácia -----------------------------------------------------------
-XTB_DEMO_URL = "wss://ws.xtb.com/demo"
+# Priamy XTB endpoint (ws.xtb.com vypnutý 2025-03-14; proxy ws.xapi.pro má
+# zakázané obchodovanie). Používame xapia/xapib.x-station.eu:5124 (DEMO).
+XTB_DEMO_URL = f"{DEMO_HOSTS[0]}:{DEMO_PORT} (TLS)"
 SYMBOL = "BITCOIN"
 CONNECT_TIMEOUT = 20           # timeout pre spojenie a požiadavky (s)
 API_PAUSE = 0.3                # rozostup medzi príkazmi (XTB limituje ~1 req/200 ms)
@@ -203,7 +206,17 @@ def run(ws):
 
     # --- 6) Čakanie a zatvorenie -------------------------------------------
     log(f"Držím pozíciu {HOLD_SECONDS} s…")
-    time.sleep(HOLD_SECONDS)
+    # Surový TLS socket XTB zavrie pri dlhšej nečinnosti – posielame ping.
+    waited = 0
+    while waited < HOLD_SECONDS:
+        step = min(5, HOLD_SECONDS - waited)
+        time.sleep(step)
+        waited += step
+        try:
+            ws.ping()
+            ws.recv()  # odpoveď na ping
+        except Exception:  # noqa: BLE001 – ping je best-effort
+            pass
 
     # aktuálna cena pre zatvorenie (BUY zatvárame na bide)
     cur = call(ws, "getSymbol", {"symbol": SYMBOL})
@@ -271,8 +284,8 @@ def main():
     ws = None
     try:
         try:
-            ws = create_connection(XTB_DEMO_URL, timeout=CONNECT_TIMEOUT)
-        except (WebSocketException, OSError) as exc:
+            ws = create_connection_demo(timeout=CONNECT_TIMEOUT)
+        except OSError as exc:
             print(f"CHYBA: Nepodarilo sa pripojiť na {XTB_DEMO_URL}: {exc}")
             return 1
 
@@ -283,7 +296,7 @@ def main():
     except XtbError as exc:
         print(f"CHYBA: {exc}")
         return 1
-    except (WebSocketException, OSError) as exc:
+    except OSError as exc:
         print(f"CHYBA: Zlyhala komunikácia so serverom: {exc}")
         return 1
     except json.JSONDecodeError as exc:

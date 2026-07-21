@@ -14,7 +14,7 @@ from dotenv import load_dotenv
 from websocket import create_connection, WebSocketException
 
 # Adresa demo WebSocket endpointu XTB
-XTB_DEMO_URL = "wss://ws.xtb.com/demo"
+XTB_DEMO_URL = "wss://ws.xapi.pro/demo"  # ws.xtb.com vypnutý 2025-03-14
 
 # Timeout (v sekundách) pre nadviazanie spojenia a jednotlivé požiadavky
 CONNECT_TIMEOUT = 15
