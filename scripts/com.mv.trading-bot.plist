@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  launchd šablóna: automatický štart bota po prihlásení + reštart pri páde.
+
+  Inštalácia:
+    cp scripts/com.mv.trading-bot.plist ~/Library/LaunchAgents/
+    launchctl load ~/Library/LaunchAgents/com.mv.trading-bot.plist
+  Odinštalovanie:
+    launchctl unload ~/Library/LaunchAgents/com.mv.trading-bot.plist
+
+  Pozn.: IB Gateway musí bežať (prihlásený na paper). KeepAlive tu rieši pád
+  celého wrappera; pády samotného bota rieši run_bot.sh (s Telegram správou).
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.mv.trading-bot</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/zsh</string>
+    <string>/Users/marianveverica/trading-bot/scripts/run_bot.sh</string>
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <dict>
+    <key>SuccessfulExit</key>
+    <false/>
+  </dict>
+  <key>StandardOutPath</key>
+  <string>/Users/marianveverica/trading-bot/data/launchd.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/marianveverica/trading-bot/data/launchd.err.log</string>
+  <key>WorkingDirectory</key>
+  <string>/Users/marianveverica/trading-bot</string>
+</dict>
+</plist>
