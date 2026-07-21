@@ -1,0 +1,4 @@
+# Python deps for the IBKR trading subsystem (trading/broker_ibkr.py).
+# Install with:  pip install -r trading/requirements.txt
+ib_async>=2.0,<3
+pandas>=2.0
