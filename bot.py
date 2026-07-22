@@ -93,9 +93,32 @@ class Bot:
                 "CHYBA: MODE != paper. Live prevádzka vyžaduje vedomú zmenu: "
                 "env BOT_CONFIRM_LIVE='ROZUMIEM-RIZIKU'. Bot končí.")
 
+    def _connect_with_retry(self) -> None:
+        """Čaká na Gateway s backoffom namiesto pádu (Gateway sa cez noc
+        reštartuje / odhlasuje). Alarm pošle raz po DATA_GAP_ALARM_S."""
+        delay, waited, alarmed = 15.0, 0.0, False
+        while True:
+            try:
+                self.broker.connect()
+                if alarmed:
+                    self.tg.send("✅ Gateway znovu dostupný, bot pokračuje.")
+                return
+            except Exception as exc:  # noqa: BLE001
+                log.warning("Gateway nedostupný (%s) — ďalší pokus o %.0f s.",
+                            exc, delay)
+                if waited >= self.cfg.DATA_GAP_ALARM_S and not alarmed:
+                    alarmed = True
+                    self.tg.send(f"🚨 Gateway nedostupný > "
+                                 f"{int(waited // 60)} min — bot čaká na "
+                                 f"pripojenie (port {self.cfg.PORT}).")
+                    self.db.log_event("alarm", "Gateway nedostupný, čakám")
+                time.sleep(delay)
+                waited += delay
+                delay = min(delay * 2, 300.0)
+
     def start(self, run_minutes: float = 0.0) -> int:
         self._guard_paper()
-        self.broker.connect()
+        self._connect_with_retry()
         self.contract = self.broker.forex(self.cfg.PAIR)
         self.ticker = self.broker.ib.reqMktData(self.contract, "", False, False)
         self._bootstrap_atr()
@@ -350,9 +373,14 @@ class Bot:
         fill = trade.orderStatus.avgFillPrice
         comm = sum(abs(f.commissionReport.commission) for f in trade.fills
                    if f.commissionReport) or 0.0
+        # TP zo signálu (G2B gap TP môže byť širší než +tp_pct); poistka:
+        # ak fill preskočil TP zo signálu, padni späť na fill ± tp_pct.
         tp_pct = getattr(strat.cfg, "tp_pct", 0.001)
-        tp_price = round(fill * (1 + tp_pct), 5) if sig.side == "long" \
-            else round(fill * (1 - tp_pct), 5)
+        tp_price = sig.tp_price
+        if sig.side == "long" and tp_price <= fill:
+            tp_price = round(fill * (1 + tp_pct), 5)
+        elif sig.side == "short" and tp_price >= fill:
+            tp_price = round(fill * (1 - tp_pct), 5)
 
         ctx = dict(sig.context)
         ctx.update({"spread": spread, "atr": self.atr, "reason": sig.reason,
@@ -454,7 +482,8 @@ class Bot:
     def _morning_briefing(self, mid: float | None) -> None:
         now = datetime.now(self.tz)
         today = now.strftime("%Y-%m-%d")
-        if now.hour < self.cfg.BRIEFING_HOUR or self._brief_date == today:
+        if (not self.cfg.BRIEFING_HOUR <= now.hour < self.cfg.BRIEFING_HOUR_END
+                or self._brief_date == today):
             return
         self._brief_date = today
         self.db.meta_set("brief_date", today)

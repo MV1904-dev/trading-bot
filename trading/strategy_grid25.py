@@ -1,4 +1,9 @@
-"""Grid25 — pásmový grid EURUSD, parametre víťaza z backtest_v2.
+"""Grid25-G2B — pásmový grid EURUSD, víťaz strategy labu (G2B).
+
+Oproti pôvodnému Grid25 baseline pridáva gap handling „TP na najbližšiu
+preskočenú úroveň“: ak jeden bar preskočí ≥ 2 grid úrovne, TP pozície sa
+položí na najbližšiu preskočenú úroveň (širší TP) namiesto +0.1 %.
+V labe: OOS ratio 1.81 vs 1.74 baseline, pod vodou 68 dní vs 102.
 
 * pozícia 25 000 jednotiek EUR (objem na IDEALPRO sa zadáva v základnej
   mene páru; „25k“ zo zadania)
@@ -40,7 +45,7 @@ class Grid25Config:
 
 
 class Grid25(StrategyBase):
-    id = "GRID25"
+    id = "Grid25-G2B"          # verzia konfigurácie — ide do orderRef aj DB
     enabled = True
 
     def __init__(self, config: Optional[Grid25Config] = None):
@@ -89,13 +94,18 @@ class Grid25(StrategyBase):
             unlock = (len(self.longs) < cfg.base_levels
                       or abs(c - self.last_long) > cfg.atr_mult * atr)
             if drop >= trigger and unlock:
+                k = int(drop / (self.ref_long * cfg.step_long))
+                gap = k >= 2
+                # G2B: pri gape TP na najbližšiu preskočenú úroveň
+                tp = c * (1 + cfg.step_long) if gap else c * (1 + cfg.tp_pct)
                 signals.append(Signal(
                     strategy_id=self.id, side="long", qty=cfg.qty,
-                    tp_price=round(c * (1 + cfg.tp_pct), 5),
-                    reason=f"pokles {drop:.5f} ≥ max(krok, 2×ATR) "
-                           f"od ref {self.ref_long:.5f}",
+                    tp_price=round(tp, 5),
+                    reason=(f"pokles {drop:.5f} ≥ max(krok, 2×ATR) "
+                            f"od ref {self.ref_long:.5f}"
+                            + (f" | GAP {k} úrovní → TP na úroveň" if gap else "")),
                     context={"ref_long": self.ref_long, "atr": atr,
-                             "levels": len(self.longs),
+                             "levels": len(self.longs), "gap_levels": k,
                              "last_long": self.last_long},
                 ))
 
@@ -104,12 +114,16 @@ class Grid25(StrategyBase):
             unlock = (len(self.shorts) < cfg.base_levels
                       or abs(c - self.last_short) > cfg.atr_mult * atr)
             if rise >= self.ref_short * cfg.step_short and unlock:
+                k = int(rise / (self.ref_short * cfg.step_short))
+                gap = k >= 2
+                tp = c * (1 - cfg.step_short) if gap else c * (1 - cfg.tp_pct)
                 signals.append(Signal(
                     strategy_id=self.id, side="short", qty=cfg.qty,
-                    tp_price=round(c * (1 - cfg.tp_pct), 5),
-                    reason=f"rast {rise:.5f} ≥ krok od ref {self.ref_short:.5f}",
+                    tp_price=round(tp, 5),
+                    reason=(f"rast {rise:.5f} ≥ krok od ref {self.ref_short:.5f}"
+                            + (f" | GAP {k} úrovní → TP na úroveň" if gap else "")),
                     context={"ref_short": self.ref_short, "atr": atr,
-                             "levels": len(self.shorts),
+                             "levels": len(self.shorts), "gap_levels": k,
                              "last_short": self.last_short},
                 ))
         return signals

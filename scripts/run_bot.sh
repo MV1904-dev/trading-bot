@@ -28,12 +28,14 @@ tg_notify() {
 
 echo "[run_bot] štart $(date '+%F %T')"
 first=1
+backoff=15
+crashes=0
 while true; do
+  started=$(date +%s)
   if [[ $first -eq 1 ]]; then
     first=0
     BOT_RESTARTED=0 "$PY" bot.py "$@"
   else
-    tg_notify "♻️ Bot spadol — reštartujem ($(date '+%H:%M:%S'))."
     BOT_RESTARTED=1 "$PY" bot.py "$@"
   fi
   code=$?
@@ -42,6 +44,18 @@ while true; do
     echo "[run_bot] bot skončil čisto (kód $code), končím."
     break
   fi
-  echo "[run_bot] bot spadol (kód $code), reštart o 15 s…"
-  sleep 15
+  ran=$(( $(date +%s) - started ))
+  # bežal dlhšie než 5 min -> nová séria pádov, backoff od začiatku
+  if [[ $ran -gt 300 ]]; then
+    backoff=15
+    crashes=0
+  fi
+  crashes=$((crashes + 1))
+  # TG len pri prvom páde série a potom každom 20. (žiadny spam)
+  if [[ $crashes -eq 1 || $((crashes % 20)) -eq 0 ]]; then
+    tg_notify "♻️ Bot spadol (kód $code, ${crashes}. pád) — reštart o ${backoff}s."
+  fi
+  echo "[run_bot] bot spadol (kód $code), reštart o ${backoff} s…"
+  sleep "$backoff"
+  backoff=$(( backoff * 2 > 300 ? 300 : backoff * 2 ))
 done

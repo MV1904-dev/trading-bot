@@ -31,6 +31,7 @@ class BotConfig:
     # --- Telegram / briefing --------------------------------------------
     TIMEZONE: str = "Europe/Bratislava"
     BRIEFING_HOUR: int = 8
+    BRIEFING_HOUR_END: int = 10    # po tomto okne sa briefing už neposiela
     BAND_ALERT_LOW: float = 1.1250
     BAND_ALERT_HIGH: float = 1.1550
     BAND_ALERT_RESET: float = 0.0030    # hystéréza na reset alarmu
