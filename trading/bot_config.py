@@ -28,6 +28,12 @@ class BotConfig:
     TICK_SECONDS: float = 10.0     # kadencia hlavnej slučky
     DATA_GAP_ALARM_S: int = 300    # výpadok dát/Gateway > 5 min → pauza+alarm
 
+    # --- Plus500 signálny režim ------------------------------------------
+    # Bot obchoduje na IBKR paper; navyše pri každom otvorení/zatvorení
+    # pošle Telegram „signál“ na ručné zrkadlenie v Plus500 appke.
+    P500_SIGNALS: bool = True
+    P500_SIGNAL_QTY: float = 10_000   # čiastka pre P500 (menší reálny účet)
+
     # --- Telegram / briefing --------------------------------------------
     TIMEZONE: str = "Europe/Bratislava"
     BRIEFING_HOUR: int = 8

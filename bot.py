@@ -73,6 +73,9 @@ class Bot:
         self._band_alerted: str | None = None
         self._blackout_notified: float = 0.0
         self._dd_alarmed = False
+        self._acct_cache: tuple = (0.0, {})
+        self._tp_missing: dict[int, int] = {}
+        self._last_reconcile: float = 0.0
         self._brief_date: str = self.db.meta_get("brief_date", "")
         self._snap_day: str = ""
         self._funding_day: str = self.db.meta_get(
@@ -225,6 +228,8 @@ class Bot:
                 ib_net = p["position"]
         note = (f"Obnova stavu: {recovered} pozícií spárovaných, "
                 f"{closed_offline} TP naplnených počas výpadku.")
+        if closed_offline:
+            self.tg.send(f"ℹ️ {note} Detaily v /pozicie a v DB.")
         log.info("%s DB net=%s, IBKR net=%s", note, expected, ib_net)
         self.db.log_event("info", note)
         if abs(expected - ib_net) > 1:
@@ -243,6 +248,7 @@ class Bot:
             self._aggregate_bar(mid)
             self._alarms(mid)
         self._check_tp_fills()
+        self._reconcile_tp()
         self._accrue_funding(mid)
         self._daily_snapshot(mid)
         self._morning_briefing(mid)
@@ -250,6 +256,33 @@ class Bot:
         self._notify_blackout()
         self.tg.poll_commands(self._handle_command)
         self.db.meta_set("tg_offset", self.tg.offset)
+
+    def _account(self) -> dict:
+        """NetLiquidation/TotalCashValue z trvalej accountValues subscription,
+        cache 60 s. (accountSummary() robí novú subscription pri každom volaní
+        a po ~50 tickoch narazí na IBKR limit — Error 322.)"""
+        now = time.time()
+        if now - self._acct_cache[0] < 60 and self._acct_cache[1]:
+            return self._acct_cache[1]
+        net = cash = 0.0
+        try:
+            for av in self.broker.ib.accountValues():
+                if av.currency not in ("", "BASE", "EUR"):
+                    continue
+                try:
+                    v = float(av.value)
+                except ValueError:
+                    continue
+                if av.tag in ("NetLiquidation", "NetLiquidationByCurrency"):
+                    net = v
+                elif av.tag in ("TotalCashValue", "TotalCashBalance"):
+                    cash = v
+        except Exception:  # noqa: BLE001
+            pass
+        vals = {"NetLiquidation": net, "TotalCashValue": cash}
+        if net > 0:
+            self._acct_cache = (now, vals)
+        return vals
 
     # --- pripojenie a dáta -------------------------------------------------
     def _watch_connection(self) -> None:
@@ -406,38 +439,109 @@ class Bot:
                f"TP {tp_price:.5f} | ATR {self.atr:.5f} | spread {spread:.5f}\n"
                f"dôvod: {sig.reason}")
         self.tg.send(msg)
+        if self.cfg.P500_SIGNALS:
+            self.tg.send(self._p500_open_msg(trade_id, sig.side, fill, tp_price))
         log.info("OTVORENÉ %s %s @ %.5f (TP %.5f, trade_id=%d)",
                  sig.side, sig.strategy_id, fill, tp_price, trade_id)
+
+    # --- Plus500 signály (ručné zrkadlenie) ---------------------------------
+    def _p500_open_msg(self, trade_id: int, side: str, entry: float,
+                       tp: float) -> str:
+        q = self.cfg.P500_SIGNAL_QTY
+        smer = "🔺 <b>KÚPIŤ</b>" if side == "long" else "🔻 <b>PREDAŤ</b>"
+        zisk_eur = abs(tp - entry) * q / tp
+        return (f"🟠 <b>P500 SIGNÁL #{trade_id} — OTVOR</b>\n"
+                f"━━━━━━━━━━━━━━━\n"
+                f"{smer} EUR/USD\n"
+                f"Čiastka: <b>{q:,.0f}</b>\n"
+                f"Trhová cena teraz: ~<code>{entry:.5f}</code>\n"
+                f"━━━━━━━━━━━━━━━\n"
+                f"Po otvorení nastav:\n"
+                f"🎯 Zavrieť pri zisku: <code>{tp:.5f}</code>\n"
+                f"🚫 Stop Loss: nenastavuj\n"
+                f"Očakávaný zisk pri cieli: ~{zisk_eur:.2f} €")
+
+    def _p500_close_msg(self, trade_id: int, side: str, entry: float,
+                        exit_price: float) -> str:
+        q = self.cfg.P500_SIGNAL_QTY
+        zisk_eur = abs(exit_price - entry) * q / exit_price
+        return (f"🟢 <b>P500 SIGNÁL #{trade_id} — ZATVORENÉ</b>\n"
+                f"━━━━━━━━━━━━━━━\n"
+                f"{side.upper()} z <code>{entry:.5f}</code> dosiahol cieľ "
+                f"<code>{exit_price:.5f}</code>.\n"
+                f"Ak máš nastavené „Zavrieť pri zisku“, pozícia sa zatvorila "
+                f"sama — skontroluj v appke.\n"
+                f"Očakávaný zisk: ~{zisk_eur:.2f} € na {q:,.0f}")
 
     def _check_tp_fills(self) -> None:
         for trade_id, t in list(self.tp_trades.items()):
             if t.orderStatus.status != "Filled":
                 continue
-            row = self.db.conn.execute("SELECT * FROM trades WHERE id=?",
-                                       (trade_id,)).fetchone()
-            if row is None:
-                self.tp_trades.pop(trade_id, None)
-                continue
-            fill = t.orderStatus.avgFillPrice or row["tp_price"]
+            fill = t.orderStatus.avgFillPrice or 0.0
             comm = sum(abs(f.commissionReport.commission) for f in t.fills
                        if f.commissionReport) or 0.0
-            pnl = (fill - row["entry_price"]) * row["qty"] if row["side"] == "long" \
-                else (row["entry_price"] - fill) * row["qty"]
-            self.db.close_trade(trade_id, fill, pnl, comm)
+            self._finalize_close(trade_id, fill, comm)
+
+    def _reconcile_tp(self) -> None:
+        """Záchranná sieť na stratené fill eventy (výpadky konektivity):
+        ak TP limitka zmizla z otvorených príkazov na 2 kontroly po sebe
+        (~2 min) a nemá status Filled, považujeme ju za naplnenú na tp_price."""
+        now = time.time()
+        if now - self._last_reconcile < 60 or not self.broker.ib.isConnected():
+            return
+        self._last_reconcile = now
+        refs = {getattr(t.order, "orderRef", "") or ""
+                for t in self.broker.ib.openTrades()}
+        for tid, t in list(self.tp_trades.items()):
+            if t.orderStatus.status == "Filled":
+                continue    # spracuje _check_tp_fills
+            row = self.db.conn.execute(
+                "SELECT strategy, tp_price, status FROM trades WHERE id=?",
+                (tid,)).fetchone()
+            if row is None or row["status"] != "open":
+                self.tp_trades.pop(tid, None)
+                continue
+            if f"{row['strategy']}:{tid}" in refs:
+                self._tp_missing.pop(tid, None)
+                continue
+            self._tp_missing[tid] = self._tp_missing.get(tid, 0) + 1
+            if self._tp_missing[tid] >= 2:
+                log.warning("TP objednávka trade_id=%d zmizla bez fill eventu "
+                            "-> rekonštruujem zavretie na %.5f.",
+                            tid, row["tp_price"])
+                self._finalize_close(tid, row["tp_price"], 0.0,
+                                     note=" (rekonštrukcia — fill event sa "
+                                          "stratil pri výpadku)")
+                self._tp_missing.pop(tid, None)
+
+    def _finalize_close(self, trade_id: int, fill: float, comm: float,
+                        note: str = "") -> None:
+        row = self.db.conn.execute("SELECT * FROM trades WHERE id=?",
+                                   (trade_id,)).fetchone()
+        if row is None or row["status"] != "open":
             self.tp_trades.pop(trade_id, None)
-            for s in self.strategies:
-                if s.id == row["strategy"]:
-                    s.on_trade_closed(trade_id, row["side"], fill)
-            total = pnl + row["funding_usd"] - comm - row["commission_usd"]
-            msg = (f"✅ <b>{row['strategy']}</b> ZAVRETÉ {row['side'].upper()} "
-                   f"{row['qty']:,.0f} {self.cfg.PAIR} "
-                   f"{row['entry_price']:.5f} → {fill:.5f}\n"
-                   f"P/L {pnl:+.2f} USD (funding {row['funding_usd']:+.2f}, "
-                   f"provízie −{comm + row['commission_usd']:.2f}) "
-                   f"= <b>{total:+.2f} USD</b>")
-            self.tg.send(msg)
-            log.info("ZAVRETÉ trade_id=%d %s @ %.5f, P/L %.2f USD",
-                     trade_id, row["side"], fill, pnl)
+            return
+        fill = fill or row["tp_price"]
+        pnl = (fill - row["entry_price"]) * row["qty"] if row["side"] == "long" \
+            else (row["entry_price"] - fill) * row["qty"]
+        self.db.close_trade(trade_id, fill, pnl, comm)
+        self.tp_trades.pop(trade_id, None)
+        for s in self.strategies:
+            if s.id == row["strategy"]:
+                s.on_trade_closed(trade_id, row["side"], fill)
+        total = pnl + row["funding_usd"] - comm - row["commission_usd"]
+        msg = (f"✅ <b>{row['strategy']}</b> ZAVRETÉ {row['side'].upper()} "
+               f"{row['qty']:,.0f} {self.cfg.PAIR} "
+               f"{row['entry_price']:.5f} → {fill:.5f}{note}\n"
+               f"P/L {pnl:+.2f} USD (funding {row['funding_usd']:+.2f}, "
+               f"provízie −{comm + row['commission_usd']:.2f}) "
+               f"= <b>{total:+.2f} USD</b>")
+        self.tg.send(msg)
+        if self.cfg.P500_SIGNALS:
+            self.tg.send(self._p500_close_msg(
+                trade_id, row["side"], row["entry_price"], fill))
+        log.info("ZAVRETÉ trade_id=%d %s @ %.5f, P/L %.2f USD%s",
+                 trade_id, row["side"], fill, pnl, note)
 
     # --- funding, snapshoty, briefing --------------------------------------
     def _accrue_funding(self, mid: float | None) -> None:
@@ -467,12 +571,8 @@ class Bot:
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         if today == self._snap_day:
             return
-        try:
-            summ = self.broker.account_summary()
-            net = float(summ.get("NetLiquidation", 0) or 0)
-            cash = float(summ.get("TotalCashValue", 0) or 0)
-        except Exception:  # noqa: BLE001
-            net = cash = 0.0
+        acct = self._account()
+        net, cash = acct["NetLiquidation"], acct["TotalCashValue"]
         yesterday = (datetime.now(timezone.utc) - timedelta(days=1)).strftime("%Y-%m-%d")
         self.db.snapshot_account(today, net, cash, self._floating_usd(mid),
                                  len(self.db.open_trades()),
@@ -488,11 +588,7 @@ class Bot:
         self._brief_date = today
         self.db.meta_set("brief_date", today)
 
-        try:
-            summ = self.broker.account_summary()
-            net = float(summ.get("NetLiquidation", 0) or 0)
-        except Exception:  # noqa: BLE001
-            net = 0.0
+        net = self._account()["NetLiquidation"]
         floating = self._floating_usd(mid)
         rows = self.db.open_trades()
         yesterday = (now - timedelta(days=1)).strftime("%Y-%m-%d")
@@ -533,11 +629,7 @@ class Bot:
             self._band_alerted = None
 
         # floating drawdown alarm
-        try:
-            net = float(self.broker.account_summary()
-                        .get("NetLiquidation", 0) or 0)
-        except Exception:  # noqa: BLE001
-            net = 0.0
+        net = self._account()["NetLiquidation"]
         floating = self._floating_usd(mid)
         if net > 0 and floating < 0 and abs(floating) / net * 100 > c.DD_ALARM_PCT:
             if not self._dd_alarmed:
@@ -565,11 +657,7 @@ class Bot:
         if cmd == "/stav":
             mid = self._current_mid()
             reason = self._blocked_reason()
-            try:
-                net = float(self.broker.account_summary()
-                            .get("NetLiquidation", 0) or 0)
-            except Exception:  # noqa: BLE001
-                net = 0.0
+            net = self._account()["NetLiquidation"]
             rows = self.db.open_trades()
             self.tg.send(
                 f"ℹ️ <b>Stav bota</b> ({self.cfg.MODE})\n"
