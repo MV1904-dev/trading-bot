@@ -100,7 +100,15 @@ class CTraderBot:
             os.getenv("CTRADER_CLIENT_SECRET", ""),
             os.getenv("CTRADER_ACCESS_TOKEN", ""),
             os.getenv("CTRADER_ACCOUNT_ID", ""),
+            refresh_token=os.getenv("CTRADER_REFRESH_TOKEN", ""),
+            env_path=str(ROOT / ".env"),
             demo=cfg.DEMO, symbol_name=cfg.SYMBOL)
+        self.broker.on_token_refreshed = lambda: self.tg.send(
+            "🔑 Access token obnovený cez refresh token (uložený do .env).")
+        self.broker.on_token_refresh_failed = lambda err: (
+            self.tg.send(f"🚨 Obnova access tokenu ZLYHALA: {err} — "
+                         f"vygeneruj nový v Open API portáli."),
+            self.db.log_event("alarm", f"token refresh zlyhal: {err}"))
 
         strat = Grid25(Grid25Config(qty=cfg.QTY, base_levels=cfg.CAP_BASE,
                                     reserve_levels=cfg.CAP_RESERVE))
@@ -252,6 +260,7 @@ class CTraderBot:
         q = self.broker.quote()
         if q is None or q["age_s"] > 120 or not self.broker.is_connected():
             self._maybe_gap_alarm()
+            self._maybe_reconnect()
             return None
         self.last_md_ts = time.time()
         if self._gap_alarmed:
@@ -259,6 +268,19 @@ class CTraderBot:
             self.auto_paused = False
             self.tg.send("✅ Stream znovu beží, pauza zrušená.")
         return q
+
+    def _maybe_reconnect(self) -> None:
+        if self.broker.is_connected():
+            return
+        if time.time() - getattr(self, "_last_reconn", 0) < 60:
+            return
+        self._last_reconn = time.time()
+        try:
+            log.info("Skúšam reconnect na cTrader…")
+            self.broker.reconnect()
+            self.tg.send("✅ cTrader spojenie obnovené.")
+        except Exception as exc:  # noqa: BLE001
+            log.warning("Reconnect zlyhal: %s", exc)
 
     def _maybe_gap_alarm(self) -> None:
         stale = time.time() - self.last_md_ts

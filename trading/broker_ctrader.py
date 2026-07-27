@@ -64,7 +64,8 @@ class CTraderError(Exception):
 
 class CTraderBroker:
     def __init__(self, client_id: str, client_secret: str, access_token: str,
-                 account_id: str, *, demo: bool = True,
+                 account_id: str, *, refresh_token: str = "",
+                 env_path: str = "", demo: bool = True,
                  symbol_name: str = "EURUSD"):
         if not all([client_id, client_secret, access_token]):
             raise CTraderError("Chýba CTRADER_CLIENT_ID / CLIENT_SECRET / "
@@ -72,6 +73,10 @@ class CTraderBroker:
         self.client_id = client_id
         self.client_secret = client_secret
         self.access_token = access_token
+        self.refresh_token = refresh_token
+        self.env_path = env_path              # kam persistovať obnovené tokeny
+        self.on_token_refreshed = None        # callback() po úspešnej obnove
+        self.on_token_refresh_failed = None   # callback(err) pri zlyhaní
         self.account_id = int(account_id) if account_id else 0
         self.host = EndPoints.PROTOBUF_DEMO_HOST if demo \
             else EndPoints.PROTOBUF_LIVE_HOST
@@ -99,15 +104,97 @@ class CTraderBroker:
         self._client.setDisconnectedCallback(self._on_disconnected)
         self._client.setMessageReceivedCallback(self._on_message)
         reactor.callFromThread(self._client.startService)
-        if not self._ready.wait(timeout):
-            raise CTraderError(
-                f"Auth nezbehol do {timeout:.0f} s "
-                f"({'app' if not self._app_authed.is_set() else 'account'} "
-                f"auth visí) — skontroluj kľúče/účet.")
-        self._resolve_symbol()
-        self._subscribe_spots()
+        if not self._app_authed.wait(timeout):
+            raise CTraderError(f"App auth nezbehol do {timeout:.0f} s — "
+                               f"skontroluj CLIENT_ID/SECRET.")
+        if self.account_id:
+            self._account_auth_with_refresh()
+            self._ready.set()
+            self._resolve_symbol()
+            self._subscribe_spots()
+        else:
+            self._ready.set()      # len app auth (výpis účtov)
         log.info("cTrader pripojený: %s, účet %d, %s (id %s).",
                  self.host, self.account_id, self.symbol_name, self.symbol_id)
+
+    def _account_auth_with_refresh(self) -> None:
+        """Account auth; pri expirácii access tokenu skúsi refresh a retry."""
+        try:
+            self._account_auth()
+            return
+        except CTraderError as exc:
+            msg = str(exc).upper()
+            if "TOKEN" not in msg and "EXPIRED" not in msg and "INVALID" not in msg:
+                raise
+            log.warning("Account auth zlyhal (%s) — skúšam token refresh.", exc)
+        self.refresh_access_token()
+        self._account_auth()
+
+    def _account_auth(self) -> None:
+        req = ProtoOAAccountAuthReq()
+        req.ctidTraderAccountId = self.account_id
+        req.accessToken = self.access_token
+        self._send(req)
+
+    def refresh_access_token(self) -> None:
+        """Obnoví access token cez ProtoOARefreshTokenReq (Spotware refresh
+        tokeny sú jednorazové — ukladá sa nový access AJ refresh token)."""
+        if not self.refresh_token:
+            err = "refresh token nie je nastavený (CTRADER_REFRESH_TOKEN)"
+            if self.on_token_refresh_failed:
+                self.on_token_refresh_failed(err)
+            raise CTraderError(err)
+        from ctrader_open_api.messages.OpenApiMessages_pb2 import \
+            ProtoOARefreshTokenReq
+        req = ProtoOARefreshTokenReq()
+        req.refreshToken = self.refresh_token
+        try:
+            res = self._send(req)
+        except CTraderError as exc:
+            log.error("Token refresh zlyhal: %s", exc)
+            if self.on_token_refresh_failed:
+                self.on_token_refresh_failed(str(exc))
+            raise
+        self.access_token = res.accessToken
+        if getattr(res, "refreshToken", ""):
+            self.refresh_token = res.refreshToken
+        self._persist_tokens()
+        log.info("Access token obnovený (expiresIn=%s s).",
+                 getattr(res, "expiresIn", "?"))
+        if self.on_token_refreshed:
+            self.on_token_refreshed()
+
+    def _persist_tokens(self) -> None:
+        if not self.env_path:
+            return
+        try:
+            with open(self.env_path) as f:
+                lines = f.readlines()
+            out, seen_a, seen_r = [], False, False
+            for ln in lines:
+                if ln.startswith("CTRADER_ACCESS_TOKEN="):
+                    out.append(f"CTRADER_ACCESS_TOKEN={self.access_token}\n")
+                    seen_a = True
+                elif ln.startswith("CTRADER_REFRESH_TOKEN="):
+                    out.append(f"CTRADER_REFRESH_TOKEN={self.refresh_token}\n")
+                    seen_r = True
+                else:
+                    out.append(ln)
+            if not seen_a:
+                out.append(f"CTRADER_ACCESS_TOKEN={self.access_token}\n")
+            if not seen_r:
+                out.append(f"CTRADER_REFRESH_TOKEN={self.refresh_token}\n")
+            with open(self.env_path, "w") as f:
+                f.writelines(out)
+        except OSError as exc:
+            log.warning("Tokeny sa nepodarilo zapísať do %s: %s",
+                        self.env_path, exc)
+
+    def reconnect(self, timeout: float = 45.0) -> None:
+        self.disconnect()
+        self._app_authed.clear()
+        self._ready.clear()
+        self.connect(timeout)
 
     def disconnect(self) -> None:
         if self._client is not None:
@@ -130,16 +217,8 @@ class CTraderBroker:
         d.addErrback(self._auth_err)
 
     def _on_app_auth(self, _msg) -> None:
+        # account auth robí connect() synchrónne (kvôli token refresh + retry)
         self._app_authed.set()
-        if not self.account_id:
-            self._ready.set()          # len app auth (výpis účtov v teste)
-            return
-        req = ProtoOAAccountAuthReq()
-        req.ctidTraderAccountId = self.account_id
-        req.accessToken = self.access_token
-        d = self._client.send(req)
-        d.addCallback(lambda _m: self._ready.set())
-        d.addErrback(self._auth_err)
 
     def _auth_err(self, failure) -> None:
         log.error("cTrader auth zlyhal: %s", failure)

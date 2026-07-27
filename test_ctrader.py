@@ -53,9 +53,31 @@ def main() -> int:
             print("  (token nemá priradené žiadne účty — over scope "
                   "'trading' pri generovaní tokenu)", file=sys.stderr)
             return 1
-        for a in accounts:
-            print(f"  ctidTraderAccountId={a['ctidTraderAccountId']}  "
-                  f"live={a['isLive']}  login={a['traderLogin']}")
+        from ctrader_open_api.messages.OpenApiMessages_pb2 import (
+            ProtoOAAccountAuthReq, ProtoOATraderReq)
+        broker2 = CTraderBroker(cid, secret, token, "", demo=True)
+        broker2.connect()
+        try:
+            for a in accounts:
+                bal = "?"
+                if not a["isLive"]:
+                    try:
+                        rq = ProtoOAAccountAuthReq()
+                        rq.ctidTraderAccountId = a["ctidTraderAccountId"]
+                        rq.accessToken = token
+                        broker2._send(rq)
+                        tr = ProtoOATraderReq()
+                        tr.ctidTraderAccountId = a["ctidTraderAccountId"]
+                        res = broker2._send(tr)
+                        digits = getattr(res.trader, "moneyDigits", 2) or 2
+                        bal = f"{res.trader.balance / 10 ** digits:,.2f}"
+                    except CTraderError as exc:
+                        bal = f"auth/trader zlyhal: {exc}"
+                print(f"  ctidTraderAccountId={a['ctidTraderAccountId']}  "
+                      f"live={a['isLive']}  login={a['traderLogin']}  "
+                      f"balance={bal}")
+        finally:
+            broker2.disconnect()
         print("\nDemo účet (live=False) vlož do .env ako CTRADER_ACCOUNT_ID "
               "a spusti test znova.")
         return 1
