@@ -236,6 +236,14 @@ class CTraderBot:
                 self._finalize_close(row["id"], deals, offline=True)
                 closed_offline += 1
         self.strategy.restore(self.db.open_trades())
+        saved = self.db.meta_get(f"ref:{self.strategy.id}", "")
+        if saved and "|" in saved:
+            rl, rs = (float(x) for x in saved.split("|"))
+            if rl > 0:
+                self.strategy.ref_long = rl
+            if rs > 0:
+                self.strategy.ref_short = rs
+            log.info("Kotvy obnovené z DB: ref_L=%.5f ref_S=%.5f", rl, rs)
         note = (f"Obnova stavu: {recovered} pozícií beží, "
                 f"{closed_offline} zavretých počas výpadku.")
         log.info(note)
@@ -271,6 +279,7 @@ class CTraderBot:
 
     def _maybe_reconnect(self) -> None:
         if self.broker.is_connected():
+            self._reconn_fails = 0
             return
         if time.time() - getattr(self, "_last_reconn", 0) < 60:
             return
@@ -278,9 +287,19 @@ class CTraderBot:
         try:
             log.info("Skúšam reconnect na cTrader…")
             self.broker.reconnect()
+            self._reconn_fails = 0
             self.tg.send("✅ cTrader spojenie obnovené.")
         except Exception as exc:  # noqa: BLE001
-            log.warning("Reconnect zlyhal: %s", exc)
+            self._reconn_fails = getattr(self, "_reconn_fails", 0) + 1
+            log.warning("Reconnect zlyhal (%d/3): %s", self._reconn_fails, exc)
+            if self._reconn_fails >= 3:
+                # Twisted klient sa po dlhom výpadku nevie oživiť v procese —
+                # tvrdý reštart, wrapper nás zdvihne s čistým stavom.
+                self.tg.send("♻️ 3× zlyhal reconnect — reštartujem proces "
+                             "(wrapper ho zdvihne).")
+                self.db.log_event("warn", "reconnect 3x zlyhal, reštart procesu")
+                import os as _os
+                _os._exit(1)
 
     def _maybe_gap_alarm(self) -> None:
         stale = time.time() - self.last_md_ts
@@ -341,6 +360,9 @@ class CTraderBot:
         if self.strategy.enabled:
             for sig in self.strategy.on_bar(closed, self.atr):
                 self._execute(sig, closed)
+            s = self.strategy
+            self.db.meta_set(f"ref:{s.id}",
+                             f"{s.ref_long or 0}|{s.ref_short or 0}")
 
     def _blocked_reason(self) -> str | None:
         if self.auto_paused:

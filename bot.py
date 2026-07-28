@@ -74,6 +74,8 @@ class Bot:
         self._blackout_notified: float = 0.0
         self._dd_alarmed = False
         self._acct_cache: tuple = (0.0, {})
+        self._entry_fails = 0
+        self._entry_block_until = 0.0
         self._tp_missing: dict[int, int] = {}
         self._last_reconcile: float = 0.0
         self._brief_date: str = self.db.meta_get("brief_date", "")
@@ -149,7 +151,12 @@ class Bot:
                     log.info("Uplynul --run-minutes limit, končím.")
                     self.tg.send("🧪 Suchý test dokončený, bot sa vypína.")
                     break
-                self.broker.ib.sleep(self.cfg.TICK_SECONDS)
+                try:
+                    self.broker.ib.sleep(self.cfg.TICK_SECONDS)
+                except Exception as exc:  # noqa: BLE001 — pád spojenia nesmie zhodiť proces
+                    log.warning("ib.sleep prerušený (%s) — pokračujem, "
+                                "reconnect rieši watchdog.", exc)
+                    time.sleep(self.cfg.TICK_SECONDS)
         except KeyboardInterrupt:
             log.info("Prerušené používateľom.")
             self.tg.send("🛑 Bot zastavený (Ctrl-C).")
@@ -218,14 +225,31 @@ class Bot:
         still_open = self.db.open_trades()
         for s in self.strategies:
             s.restore([r for r in still_open if r["strategy"] == s.id])
+            saved = self.db.meta_get(f"ref:{s.id}", "")
+            if saved and "|" in saved:
+                rl, rs = (float(x) for x in saved.split("|"))
+                if rl > 0:
+                    s.ref_long = rl
+                if rs > 0:
+                    s.ref_short = rs
+                log.info("Kotvy %s obnovené z DB: ref_L=%.5f ref_S=%.5f",
+                         s.id, rl, rs)
 
         # kontrola voči netto pozícii na IBKR
         expected = sum(r["qty"] if r["side"] == "long" else -r["qty"]
                        for r in still_open)
-        ib_net = 0.0
-        for p in self.broker.positions():
-            if p["symbol"] in (self.cfg.PAIR, "EUR"):
-                ib_net = p["position"]
+        def _net() -> float:
+            out = 0.0
+            for p in self.broker.positions():
+                if p["symbol"] in (self.cfg.PAIR, "EUR"):
+                    out = p["position"]
+            return out
+
+        ib_net = _net()
+        if abs(expected - ib_net) > 1:
+            # sync pozícií po connecte býva o pár sekúnd pozadu — retry
+            self.broker.ib.sleep(3)
+            ib_net = _net()
         note = (f"Obnova stavu: {recovered} pozícií spárovaných, "
                 f"{closed_offline} TP naplnených počas výpadku.")
         if closed_offline:
@@ -353,6 +377,9 @@ class Bot:
                 continue
             for sig in s.on_bar(closed, self.atr):
                 self._execute(s, sig, closed)
+            if hasattr(s, "ref_long"):
+                self.db.meta_set(f"ref:{s.id}",
+                                 f"{s.ref_long or 0}|{s.ref_short or 0}")
 
     def _update_atr(self, bar: Bar) -> None:
         n = self.cfg.ATR_PERIOD
@@ -374,6 +401,9 @@ class Bot:
             return f"makro blackout: {ev['currency']} {ev['title']} o {t}"
         if not self.broker.ib.isConnected():
             return "Gateway odpojený"
+        if time.time() < self._entry_block_until:
+            left = int((self._entry_block_until - time.time()) // 60) + 1
+            return f"circuit breaker po zlyhaných vstupoch (~{left} min)"
         return None
 
     def _execute(self, strat, sig: Signal, bar: Bar) -> None:
@@ -401,7 +431,18 @@ class Bot:
                                self.atr or 0.0, spread, "error",
                                f"vstup nenaplnený ({trade.orderStatus.status})",
                                sig.context)
+            self._entry_fails += 1
+            if self._entry_fails >= 3 and time.time() >= self._entry_block_until:
+                self._entry_block_until = time.time() + 1800
+                msg = ("🚨 3× po sebe zlyhal vstupný príkaz "
+                       f"(posledný stav: {trade.orderStatus.status}) — "
+                       "vstupy pozastavené na 30 min. Skontroluj Gateway "
+                       "(API/trading stav).")
+                self.tg.send(msg)
+                self.db.log_event("alarm", msg)
+                self._entry_fails = 0
             return
+        self._entry_fails = 0
 
         fill = trade.orderStatus.avgFillPrice
         comm = sum(abs(f.commissionReport.commission) for f in trade.fills
