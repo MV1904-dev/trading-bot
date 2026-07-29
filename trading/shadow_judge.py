@@ -68,7 +68,10 @@ class ShadowJudge:
                  model: str = DEFAULT_MODEL,
                  band_lo: float = 1.1200, band_hi: float = 1.1600):
         self.db_path = str(db_path)
-        self.api_key = api_key or ""
+        api_key = (api_key or "").strip()
+        if api_key.startswith("<"):      # placeholder z .env
+            api_key = ""
+        self.api_key = api_key
         self.model = model
         self.band_lo, self.band_hi = band_lo, band_hi
         self.enabled = bool(self.api_key)
