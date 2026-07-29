@@ -60,6 +60,7 @@ class CTraderBotConfig:
     BAR_SECONDS: int = 300
     ATR_PERIOD: int = 14
     DATA_GAP_ALARM_S: int = 300
+    HARD_RESTART_S: int = 900   # mŕtvy stream > 15 min → reštart procesu
     DD_ALARM_PCT: float = 10.0
     TIMEZONE: str = "Europe/Bratislava"
     TG_PREFIX: str = "[CTRADER] "
@@ -278,28 +279,21 @@ class CTraderBot:
         return q
 
     def _maybe_reconnect(self) -> None:
+        """SDK (Twisted ClientService) sa reconnectuje samo a auth reťazec
+        beží v callbackoch — do toho NEZASAHUJEME, dva klienti naraz spôsobia
+        auth timeouty. Ak je stream mŕtvy dlhšie než HARD_RESTART_S, spravíme
+        tvrdý reštart procesu (wrapper zdvihne čistú inštanciu)."""
         if self.broker.is_connected():
-            self._reconn_fails = 0
             return
-        if time.time() - getattr(self, "_last_reconn", 0) < 60:
+        dead_s = time.time() - self.last_md_ts
+        if dead_s < self.cfg.HARD_RESTART_S:
             return
-        self._last_reconn = time.time()
-        try:
-            log.info("Skúšam reconnect na cTrader…")
-            self.broker.reconnect()
-            self._reconn_fails = 0
-            self.tg.send("✅ cTrader spojenie obnovené.")
-        except Exception as exc:  # noqa: BLE001
-            self._reconn_fails = getattr(self, "_reconn_fails", 0) + 1
-            log.warning("Reconnect zlyhal (%d/3): %s", self._reconn_fails, exc)
-            if self._reconn_fails >= 3:
-                # Twisted klient sa po dlhom výpadku nevie oživiť v procese —
-                # tvrdý reštart, wrapper nás zdvihne s čistým stavom.
-                self.tg.send("♻️ 3× zlyhal reconnect — reštartujem proces "
-                             "(wrapper ho zdvihne).")
-                self.db.log_event("warn", "reconnect 3x zlyhal, reštart procesu")
-                import os as _os
-                _os._exit(1)
+        log.warning("Stream mŕtvy %.0f min — tvrdý reštart procesu.", dead_s / 60)
+        self.tg.send(f"♻️ Spojenie mŕtve > {int(dead_s // 60)} min napriek "
+                     f"auto-reconnectu — reštartujem proces.")
+        self.db.log_event("warn", "stream mŕtvy, reštart procesu")
+        import os as _os
+        _os._exit(1)
 
     def _maybe_gap_alarm(self) -> None:
         stale = time.time() - self.last_md_ts

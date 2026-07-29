@@ -104,37 +104,26 @@ class CTraderBroker:
         self._client.setDisconnectedCallback(self._on_disconnected)
         self._client.setMessageReceivedCallback(self._on_message)
         reactor.callFromThread(self._client.startService)
-        if not self._app_authed.wait(timeout):
-            raise CTraderError(f"App auth nezbehol do {timeout:.0f} s — "
-                               f"skontroluj CLIENT_ID/SECRET.")
+
+        if not self._ready.wait(timeout):
+            # môže ísť o expirovaný access token — skús refresh a zopakuj
+            if self.refresh_token and self._app_authed.is_set():
+                log.warning("Account auth nezbehol — skúšam token refresh.")
+                self.refresh_access_token()
+                self._ready.clear()
+                reactor.callFromThread(self._reauth_chain)
+                if not self._ready.wait(timeout):
+                    raise CTraderError("Auth nezbehol ani po refreshi tokenu.")
+            else:
+                stage = "app" if not self._app_authed.is_set() else "account"
+                raise CTraderError(f"{stage} auth nezbehol do {timeout:.0f} s.")
+
         if self.account_id:
-            self._account_auth_with_refresh()
-            self._ready.set()
-            self._resolve_symbol()
+            if self.symbol_id is None:
+                self._resolve_symbol()
             self._subscribe_spots()
-        else:
-            self._ready.set()      # len app auth (výpis účtov)
         log.info("cTrader pripojený: %s, účet %d, %s (id %s).",
                  self.host, self.account_id, self.symbol_name, self.symbol_id)
-
-    def _account_auth_with_refresh(self) -> None:
-        """Account auth; pri expirácii access tokenu skúsi refresh a retry."""
-        try:
-            self._account_auth()
-            return
-        except CTraderError as exc:
-            msg = str(exc).upper()
-            if "TOKEN" not in msg and "EXPIRED" not in msg and "INVALID" not in msg:
-                raise
-            log.warning("Account auth zlyhal (%s) — skúšam token refresh.", exc)
-        self.refresh_access_token()
-        self._account_auth()
-
-    def _account_auth(self) -> None:
-        req = ProtoOAAccountAuthReq()
-        req.ctidTraderAccountId = self.account_id
-        req.accessToken = self.access_token
-        self._send(req)
 
     def refresh_access_token(self) -> None:
         """Obnoví access token cez ProtoOARefreshTokenReq (Spotware refresh
@@ -209,16 +198,40 @@ class CTraderBroker:
 
     # --- callbacky (bežia v reactor vlákne) --------------------------------
     def _on_connected(self, client) -> None:
+        # Client dedí z Twisted ClientService → reconnectuje sa sám. Preto musí
+        # celý auth reťazec (app → account → subscribe) bežať TU, inak po
+        # auto-reconnecte ostane spojenie bez účtu a bez spotov.
+        self._reauth_chain()
+
+    def _reauth_chain(self) -> None:
         req = ProtoOAApplicationAuthReq()
         req.clientId = self.client_id
         req.clientSecret = self.client_secret
-        d = client.send(req)
+        d = self._client.send(req)
         d.addCallback(self._on_app_auth)
         d.addErrback(self._auth_err)
 
     def _on_app_auth(self, _msg) -> None:
-        # account auth robí connect() synchrónne (kvôli token refresh + retry)
         self._app_authed.set()
+        if not self.account_id:
+            self._ready.set()          # len app auth (výpis účtov)
+            return
+        req = ProtoOAAccountAuthReq()
+        req.ctidTraderAccountId = self.account_id
+        req.accessToken = self.access_token
+        d = self._client.send(req)
+        d.addCallback(self._on_account_auth)
+        d.addErrback(self._auth_err)
+
+    def _on_account_auth(self, _msg) -> None:
+        self._ready.set()
+        # po re-connecte treba obnoviť odber spotov (symbol už poznáme)
+        if self.symbol_id is not None:
+            req = ProtoOASubscribeSpotsReq()
+            req.ctidTraderAccountId = self.account_id
+            req.symbolId.append(self.symbol_id)
+            self._client.send(req)
+            log.info("Spot odber obnovený po reconnecte.")
 
     def _auth_err(self, failure) -> None:
         log.error("cTrader auth zlyhal: %s", failure)
