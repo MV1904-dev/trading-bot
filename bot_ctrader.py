@@ -260,6 +260,17 @@ class CTraderBot:
         self._daily_day = days[-1] if days else ""
 
     def _restore_state(self) -> None:
+        # kotvy obnov VŽDY (aj bez otvorených obchodov — bug: predtým sa
+        # preskočili early-returnom a status ukazoval ref 0.00000)
+        saved = self.db.meta_get(f"ref:{self.strategy.id}", "")
+        if saved and "|" in saved:
+            rl, rs = (float(x) for x in saved.split("|"))
+            if rl > 0:
+                self.strategy.ref_long = rl
+            if rs > 0:
+                self.strategy.ref_short = rs
+            log.info("Kotvy obnovené z DB: ref_L=%.5f ref_S=%.5f", rl, rs)
+
         rows = self.db.open_trades()
         if not rows:
             return
@@ -284,14 +295,6 @@ class CTraderBot:
         still = self.db.open_trades()
         for s in self.strategies:
             s.restore([r for r in still if r["strategy"] == s.id])
-        saved = self.db.meta_get(f"ref:{self.strategy.id}", "")
-        if saved and "|" in saved:
-            rl, rs = (float(x) for x in saved.split("|"))
-            if rl > 0:
-                self.strategy.ref_long = rl
-            if rs > 0:
-                self.strategy.ref_short = rs
-            log.info("Kotvy obnovené z DB: ref_L=%.5f ref_S=%.5f", rl, rs)
         note = (f"Obnova stavu: {recovered} pozícií beží, "
                 f"{closed_offline} zavretých počas výpadku.")
         log.info(note)
@@ -328,18 +331,30 @@ class CTraderBot:
         return q
 
     def _maybe_reconnect(self) -> None:
-        """SDK (Twisted ClientService) sa reconnectuje samo a auth reťazec
-        beží v callbackoch — do toho NEZASAHUJEME, dva klienti naraz spôsobia
-        auth timeouty. Ak je stream mŕtvy dlhšie než HARD_RESTART_S, spravíme
-        tvrdý reštart procesu (wrapper zdvihne čistú inštanciu)."""
-        if self.broker.is_connected():
-            return
-        dead_s = time.time() - self.last_md_ts
+        """Trojstupňová obrana mŕtveho streamu:
+        1. spojenie žije, ale spoty nechodia > 3 min → re-subscribe (lacné;
+           subscription vie umrieť aj pri živom TCP)
+        2. SDK sa reconnectuje samo (auth reťazec beží v callbackoch)
+        3. dáta mŕtve > HARD_RESTART_S bez ohľadu na stav spojenia →
+           tvrdý reštart procesu (wrapper zdvihne čistú inštanciu)"""
+        now = time.time()
+        dead_s = now - self.last_md_ts
+
+        if self.broker.is_connected() and dead_s > 180 \
+                and now - getattr(self, "_last_resub", 0) > 120:
+            self._last_resub = now
+            try:
+                self.broker._subscribe_spots()
+                log.info("Stream stojí %.0f s pri živom spojení — poslal "
+                         "som re-subscribe.", dead_s)
+            except Exception as exc:  # noqa: BLE001
+                log.warning("Re-subscribe zlyhal: %s", exc)
+
         if dead_s < self.cfg.HARD_RESTART_S:
             return
         log.warning("Stream mŕtvy %.0f min — tvrdý reštart procesu.", dead_s / 60)
-        self.tg.send(f"♻️ Spojenie mŕtve > {int(dead_s // 60)} min napriek "
-                     f"auto-reconnectu — reštartujem proces.")
+        self.tg.send(f"♻️ Dáta mŕtve > {int(dead_s // 60)} min napriek "
+                     f"obrane — reštartujem proces.")
         self.db.log_event("warn", "stream mŕtvy, reštart procesu")
         import os as _os
         _os._exit(1)
