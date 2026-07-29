@@ -215,6 +215,19 @@ class Bot:
             ref = getattr(t.order, "orderRef", "") or ""
             open_by_ref[ref] = t
 
+        # ORPHAN SWEEP: zruš každý náš príkaz, ktorý nepatrí k otvorenému
+        # DB obchodu (zombie "Inactive" vstup z výpadku vie ožiť a otvoriť
+        # nechcenú pozíciu — stalo sa 29.7.: -29.50 USD)
+        valid_refs = {f"{r['strategy']}:{r['id']}" for r in rows}
+        for t in self.broker.ib.openTrades():
+            ref = getattr(t.order, "orderRef", "") or ""
+            if ref.startswith("Grid25") and ref not in valid_refs:
+                log.warning("Orphan sweep: ruším %s %s x%s (ref=%s)",
+                            t.order.action, t.order.orderId,
+                            t.order.totalQuantity, ref)
+                self.broker.ib.cancelOrder(t.order)
+        self.broker.ib.sleep(1)
+
         recovered, closed_offline = 0, 0
         for row in rows:
             ref = f"{row['strategy']}:{row['id']}"
