@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import argparse
 import csv as _csv
+import json
 import logging
 import os
 import sys
@@ -41,6 +42,7 @@ from trading.broker_ctrader import CTraderBroker, CTraderError
 from trading.macro import MacroCalendar
 from trading.strategy_base import Bar, Signal
 from trading.strategy_grid25 import Grid25, Grid25Config
+from trading.strategy_s7 import S7Config, S7Continuation
 from trading.tg import Telegram
 
 ROOT = Path(__file__).resolve().parent
@@ -54,6 +56,8 @@ class CTraderBotConfig:
     QTY: float = 2_000
     CAP_BASE: int = 20             # G3_cap20 — bez rezervných úrovní
     CAP_RESERVE: int = 0
+    S7_ENABLED: bool = False    # NEPREŠIEL nezávislým overením — viď trading/strategy_s7.py
+    S7_QTY: float = 2_000
     FAILSAFE_BAND: float = 0.02    # G8 poistka
     FAILSAFE_RELEASE: float = 0.01
     TICK_SECONDS: float = 10.0
@@ -111,16 +115,19 @@ class CTraderBot:
                          f"vygeneruj nový v Open API portáli."),
             self.db.log_event("alarm", f"token refresh zlyhal: {err}"))
 
-        strat = Grid25(Grid25Config(qty=cfg.QTY, base_levels=cfg.CAP_BASE,
-                                    reserve_levels=cfg.CAP_RESERVE))
-        strat.id = "Grid25-G2B-CT"
-        self.strategy = strat
+        grid = Grid25(Grid25Config(qty=cfg.QTY, base_levels=cfg.CAP_BASE,
+                                   reserve_levels=cfg.CAP_RESERVE))
+        grid.id = "Grid25-G2B-CT"
+        s7 = S7Continuation(S7Config(qty=cfg.S7_QTY))
+        s7.enabled = cfg.S7_ENABLED
+        self.strategies = [grid, s7]
+        self.strategy = grid          # spätná kompatibilita (kotvy, status)
         self.macro = MacroCalendar(cfg.CALENDAR_CACHE)
 
-        self.atr: float | None = None
-        self._atr_prev_close: float | None = None
-        self._bar_bucket: int | None = None
-        self._bar: Bar | None = None
+        self._tfs = sorted({s.timeframe_s for s in self.strategies if s.enabled})
+        self._bars: dict[int, dict] = {}        # tf -> {"bucket","bar"}
+        self._atr: dict[int, float | None] = {}
+        self._atr_prev: dict[int, float | None] = {}
         self.paused_until = 0.0
         self.auto_paused = False
         self.last_md_ts = time.time()
@@ -155,7 +162,8 @@ class CTraderBot:
         self.macro.refresh()
         restarted = os.getenv("BOT_RESTARTED") == "1"
         self.tg.send(f"🤖 <b>cTrader bot {'reštartovaný' if restarted else 'spustený'}</b> "
-                     f"(demo, {self.cfg.SYMBOL})\n{self.strategy.status_line()}\n"
+                     f"(demo, {self.cfg.SYMBOL})\n"
+                     + "\n".join(s.status_line() for s in self.strategies) + "\n"
                      f"Balance: {acct['balance']:,.2f} | pozícia "
                      f"{self.cfg.QTY:,.0f}, kapacita {self.cfg.CAP_BASE}/smer "
                      f"+ G8 poistka")
@@ -182,25 +190,54 @@ class CTraderBot:
         return 0
 
     # ------------------------------------------------------------------ #
-    def _bootstrap_atr(self) -> None:
-        try:
-            candles = self.broker.candles_m5(600)
-        except CTraderError as exc:
-            log.warning("ATR bootstrap zlyhal (%s).", exc)
-            return
-        n = self.cfg.ATR_PERIOD
-        if len(candles) <= n:
-            return
+    @staticmethod
+    def _calc_atr(bars: list, period: int) -> float | None:
+        if len(bars) <= period:
+            return None
         trs = []
-        for prev, cur in zip(candles, candles[1:]):
-            trs.append(max(cur["h"] - cur["l"], abs(cur["h"] - prev["c"]),
-                           abs(cur["l"] - prev["c"])))
-        atr = sum(trs[:n]) / n
-        for tr in trs[n:]:
-            atr = atr * (n - 1) / n + tr / n
-        self.atr = atr
-        self._atr_prev_close = candles[-1]["c"]
-        log.info("ATR(%d, M5) bootstrap: %.6f (%d sviečok).", n, atr, len(candles))
+        for prev, cur in zip(bars, bars[1:]):
+            trs.append(max(cur.high - cur.low, abs(cur.high - prev.close),
+                           abs(cur.low - prev.close)))
+        atr = sum(trs[:period]) / period
+        for tr in trs[period:]:
+            atr = atr * (period - 1) / period + tr / period
+        return atr
+
+    @staticmethod
+    def _to_bars(candles: list, tf: int) -> list:
+        """M5 sviečky → bary požadovaného timeframu (zoskupené na hranice)."""
+        buckets: dict[int, Bar] = {}
+        for c in candles:
+            k = int(c["time"] // tf)
+            b = buckets.get(k)
+            if b is None:
+                buckets[k] = Bar(k * tf, c["o"], c["h"], c["l"], c["c"])
+            else:
+                b.high = max(b.high, c["h"])
+                b.low = min(b.low, c["l"])
+                b.close = c["c"]
+        return [buckets[k] for k in sorted(buckets)]
+
+    def _bootstrap_atr(self) -> None:
+        """ATR pre každý použitý timeframe + predohriatie stavových stratégií."""
+        try:
+            candles = self.broker.candles_m5(3000)      # ~10 dní
+        except CTraderError as exc:
+            log.warning("Bootstrap zlyhal (%s).", exc)
+            return
+        if not candles:
+            return
+        for tf in self._tfs:
+            bars = self._to_bars(candles, tf)
+            if len(bars) > 1:
+                bars = bars[:-1]                        # posledný bar je neúplný
+            self._atr[tf] = self._calc_atr(bars, self.cfg.ATR_PERIOD)
+            self._atr_prev[tf] = bars[-1].close if bars else None
+            for s in self.strategies:
+                if s.enabled and s.timeframe_s == tf:
+                    s.warmup(bars)
+            log.info("TF %ds: ATR %.6f, %d barov (warmup hotový).",
+                     tf, self._atr[tf] or 0.0, len(bars))
 
     def _load_daily_extremes(self) -> None:
         closes: dict[str, float] = {}
@@ -236,7 +273,9 @@ class CTraderBot:
             else:
                 self._finalize_close(row["id"], deals, offline=True)
                 closed_offline += 1
-        self.strategy.restore(self.db.open_trades())
+        still = self.db.open_trades()
+        for s in self.strategies:
+            s.restore([r for r in still if r["strategy"] == s.id])
         saved = self.db.meta_get(f"ref:{self.strategy.id}", "")
         if saved and "|" in saved:
             rl, rs = (float(x) for x in saved.split("|"))
@@ -259,6 +298,7 @@ class CTraderBot:
             self._update_failsafe_daily(px["mid"])
             self._aggregate_bar(px["mid"])
         self._poll_closes()
+        self._enforce_time_stops()
         self._daily_snapshot()
         self.macro.refresh()
         if self.commands_enabled:
@@ -331,32 +371,43 @@ class CTraderBot:
             self.tg.send(f"✅ G8 poistka uvoľnená, kapacita {self.cfg.CAP_BASE}/smer.")
 
     def _aggregate_bar(self, mid: float) -> None:
-        bucket = int(time.time() // self.cfg.BAR_SECONDS)
-        if self._bar_bucket is None:
-            self._bar_bucket = bucket
-            self._bar = Bar(bucket * self.cfg.BAR_SECONDS, mid, mid, mid, mid)
-            return
-        if bucket == self._bar_bucket:
-            b = self._bar
-            b.high = max(b.high, mid)
-            b.low = min(b.low, mid)
-            b.close = mid
-            return
-        closed = self._bar
-        self._bar_bucket = bucket
-        self._bar = Bar(bucket * self.cfg.BAR_SECONDS, mid, mid, mid, mid)
-        n = self.cfg.ATR_PERIOD
-        pc = self._atr_prev_close if self._atr_prev_close is not None else closed.open
-        tr = max(closed.high - closed.low, abs(closed.high - pc),
-                 abs(closed.low - pc))
-        self.atr = tr if self.atr is None else self.atr * (n - 1) / n + tr / n
-        self._atr_prev_close = closed.close
-        if self.strategy.enabled:
-            for sig in self.strategy.on_bar(closed, self.atr):
-                self._execute(sig, closed)
-            s = self.strategy
-            self.db.meta_set(f"ref:{s.id}",
-                             f"{s.ref_long or 0}|{s.ref_short or 0}")
+        """Buduje bary pre každý použitý timeframe a po uzavretí baru
+        zavolá stratégie, ktoré na danom TF bežia."""
+        now = time.time()
+        for tf in self._tfs:
+            st = self._bars.setdefault(tf, {"bucket": None, "bar": None})
+            bucket = int(now // tf)
+            if st["bucket"] is None:
+                st["bucket"] = bucket
+                st["bar"] = Bar(bucket * tf, mid, mid, mid, mid)
+                continue
+            if bucket == st["bucket"]:
+                b = st["bar"]
+                b.high = max(b.high, mid)
+                b.low = min(b.low, mid)
+                b.close = mid
+                continue
+
+            closed = st["bar"]
+            st["bucket"] = bucket
+            st["bar"] = Bar(bucket * tf, mid, mid, mid, mid)
+
+            n = self.cfg.ATR_PERIOD
+            pc = self._atr_prev.get(tf) or closed.open
+            tr = max(closed.high - closed.low, abs(closed.high - pc),
+                     abs(closed.low - pc))
+            prev_atr = self._atr.get(tf)
+            self._atr[tf] = tr if prev_atr is None else prev_atr * (n - 1) / n + tr / n
+            self._atr_prev[tf] = closed.close
+
+            for s in self.strategies:
+                if not s.enabled or s.timeframe_s != tf:
+                    continue
+                for sig in s.on_bar(closed, self._atr[tf]):
+                    self._execute(sig, closed)
+                if hasattr(s, "ref_long"):
+                    self.db.meta_set(f"ref:{s.id}",
+                                     f"{s.ref_long or 0}|{s.ref_short or 0}")
 
     def _blocked_reason(self) -> str | None:
         if self.auto_paused:
@@ -373,30 +424,33 @@ class CTraderBot:
         reason = self._blocked_reason()
         if reason:
             self.db.log_signal(sig.strategy_id, sig.side, bar.close,
-                               self.atr or 0.0, 0.0, "blocked", reason,
-                               sig.context)
+                               0.0, 0.0, "blocked", reason, sig.context)
             return
         units = sig.qty if sig.side == "long" else -sig.qty
         try:
             res = self.broker.market_order_with_tp(units, sig.tp_price,
-                                                   tag=sig.strategy_id)
+                                                   tag=sig.strategy_id,
+                                                   sl_price=sig.sl_price)
         except CTraderError as exc:
             self.db.log_signal(sig.strategy_id, sig.side, bar.close,
-                               self.atr or 0.0, 0.0, "error", str(exc),
-                               sig.context)
+                               0.0, 0.0, "error", str(exc), sig.context)
             log.warning("Vstup zlyhal: %s", exc)
             return
         ctx = dict(sig.context)
-        ctx.update({"reason": sig.reason, "failsafe": self.failsafe})
+        ctx.update({"reason": sig.reason, "failsafe": self.failsafe,
+                    "sl_price": sig.sl_price, "max_hold_s": sig.max_hold_s})
         trade_id = self.db.open_trade(
             sig.strategy_id, sig.side, sig.qty, res["price"], sig.tp_price,
             res["position_id"], res["order_id"], 0.0, ctx)
-        self.strategy.on_trade_opened(trade_id, sig.side, res["price"])
+        for s in self.strategies:
+            if s.id == sig.strategy_id:
+                s.on_trade_opened(trade_id, sig.side, res["price"])
         self.db.log_signal(sig.strategy_id, sig.side, bar.close,
-                           self.atr or 0.0, 0.0, "executed", sig.reason, ctx)
+                           0.0, 0.0, "executed", sig.reason, ctx)
+        sl_txt = f" | SL {sig.sl_price:.5f}" if sig.sl_price else ""
         self.tg.send(f"📈 <b>{sig.strategy_id}</b> OTVORENÉ {sig.side.upper()} "
                      f"{sig.qty:,.0f} {self.cfg.SYMBOL} @ {res['price']:.5f}\n"
-                     f"TP {sig.tp_price:.5f} (na serveri) | ATR {self.atr:.5f}\n"
+                     f"TP {sig.tp_price:.5f}{sl_txt} (na serveri)\n"
                      f"dôvod: {sig.reason}")
         log.info("OTVORENÉ %s @ %.5f (pozícia %s, db #%d)",
                  sig.side, res["price"], res["position_id"], trade_id)
@@ -425,6 +479,26 @@ class CTraderBot:
         for row in missing:
             self._finalize_close(row["id"], deals)
 
+    def _enforce_time_stops(self) -> None:
+        """Zatvorí pozície, ktoré prekročili max_hold_s (S7 má 24 h)."""
+        now = time.time()
+        for row in self.db.open_trades():
+            try:
+                ctx = json.loads(row["context"] or "{}")
+            except ValueError:
+                continue
+            mh = float(ctx.get("max_hold_s") or 0)
+            if not mh or now - row["ts_open"] <= mh:
+                continue
+            log.info("Časový stop: zatváram #%d (%s, %.1f h).",
+                     row["id"], row["strategy"], (now - row["ts_open"]) / 3600)
+            try:
+                self.broker.close_trade(str(row["entry_order_id"]))
+                self.tg.send(f"⏱ <b>{row['strategy']}</b> časový stop "
+                             f"({mh / 3600:.0f} h) — zatváram #{row['id']}.")
+            except CTraderError as exc:
+                log.warning("Časový stop zlyhal pre #%d: %s", row["id"], exc)
+
     def _finalize_close(self, db_id: int, deals: dict,
                         offline: bool = False) -> None:
         row = self.db.conn.execute("SELECT * FROM trades WHERE id=?",
@@ -447,7 +521,9 @@ class CTraderBot:
             self.db.add_funding(db_id, datetime.now(timezone.utc)
                                 .strftime("%Y-%m-%d"), swap)
         self.db.close_trade(db_id, close_price, pnl, comm)
-        self.strategy.on_trade_closed(db_id, row["side"], close_price)
+        for s in self.strategies:
+            if s.id == row["strategy"]:
+                s.on_trade_closed(db_id, row["side"], close_price)
         note = " (počas výpadku)" if offline else ""
         self.tg.send(f"✅ <b>{row['strategy']}</b> ZAVRETÉ {row['side'].upper()} "
                      f"{row['qty']:,.0f} {row['entry_price']:.5f} → "
@@ -485,7 +561,7 @@ class CTraderBot:
                          f"Pozície: {len(self.db.open_trades())} | poistka: "
                          f"{'🚨' if self.failsafe else 'ok'}\n"
                          f"Vstupy: {'⏸ ' + reason if reason else '▶️ povolené'}\n"
-                         f"{self.strategy.status_line()}")
+                         + "\n".join(s.status_line() for s in self.strategies))
         elif cmd == "/pozicie":
             rows = self.db.open_trades()
             if not rows:

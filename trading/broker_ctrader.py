@@ -363,12 +363,16 @@ class CTraderBroker:
     # Obchodovanie
     # ------------------------------------------------------------------ #
     def market_order_with_tp(self, units: float, tp_price: float,
-                             tag: str = "") -> dict:
-        """MARKET order s relatívnym TP. Vráti {'position_id', 'price',
-        'order_id'}; commission príde až v closing deale."""
+                             tag: str = "", sl_price: float = 0.0) -> dict:
+        """MARKET order s relatívnym TP (a voliteľne SL) na serveri.
+
+        cTrader chce vzdialenosti, nie absolútne ceny → prepočet z aktuálnej
+        kotácie. Vráti {'position_id', 'price', 'order_id'}.
+        """
         q = self.quote()
         if q is None:
-            raise CTraderError("Bez kotácie neviem vypočítať relatívny TP.")
+            raise CTraderError("Bez kotácie neviem vypočítať relatívny TP/SL.")
+        ref = q["ask"] if units > 0 else q["bid"]
         req = ProtoOANewOrderReq()
         req.ctidTraderAccountId = self.account_id
         req.symbolId = self.symbol_id
@@ -376,7 +380,9 @@ class CTraderBroker:
         req.tradeSide = ProtoOATradeSide.BUY if units > 0 \
             else ProtoOATradeSide.SELL
         req.volume = int(abs(units)) * VOLUME_SCALE
-        req.relativeTakeProfit = max(int(round(abs(tp_price - q["mid"]) * 1e5)), 1)
+        req.relativeTakeProfit = max(int(round(abs(tp_price - ref) * 1e5)), 1)
+        if sl_price:
+            req.relativeStopLoss = max(int(round(abs(ref - sl_price) * 1e5)), 1)
         if tag:
             req.label = tag[:100]
         resp = self._send(req)
@@ -386,7 +392,7 @@ class CTraderBroker:
         while time.time() < deadline:
             with self._exec_lock:
                 ev = self._execs.get(oid)
-            if ev is not None and getattr(ev, "executionType", 0) == 3:  # ORDER_FILLED
+            if ev is not None and getattr(ev, "executionType", 0) == 3:
                 deal = getattr(ev, "deal", None)
                 pos = getattr(ev, "position", None)
                 return {

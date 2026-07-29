@@ -26,16 +26,24 @@ class Signal:
     strategy_id: str
     side: str                       # "long" | "short"
     qty: float
-    tp_price: float                 # limitka TP; SL sa nepoužíva
+    tp_price: float                 # cieľová cena (limitka/serverový TP)
+    sl_price: float = 0.0           # 0 = bez stop-lossu (gridové stratégie)
+    max_hold_s: float = 0.0         # 0 = bez časového stopu
     reason: str = ""
     context: dict = field(default_factory=dict)
 
 
 class StrategyBase:
-    """Základ pre všetky stratégie. Podtrieda definuje ID a on_bar()."""
+    """Základ pre všetky stratégie. Podtrieda definuje ID a on_bar().
+
+    ``timeframe_s`` hovorí exekučnej vrstve, aké bary má stratégii posielať
+    (gridy bežia na M5 = 300 s, S7 na H1 = 3600 s). Bot agreguje bary a ATR
+    pre každý použitý timeframe zvlášť.
+    """
 
     id: str = "BASE"
     enabled: bool = False
+    timeframe_s: int = 300
 
     def on_bar(self, bar: Bar, atr: Optional[float]) -> list[Signal]:
         """Zavolané po uzavretí baru. Vracia signály na otvorenie pozícií."""
@@ -46,6 +54,11 @@ class StrategyBase:
 
     def on_trade_closed(self, trade_id: int, side: str, price: float) -> None:
         """TP naplnený — pozícia zavretá."""
+
+    def warmup(self, bars: list) -> None:
+        """Predohriatie interného stavu historickými barmi po štarte
+        (bez generovania signálov). Stratégie so stavovou logikou
+        (zigzag, setupy) si tým obnovia kontext."""
 
     def restore(self, open_trades: list) -> None:
         """Obnova interného stavu z DB riadkov (status='open') po reštarte."""
