@@ -29,10 +29,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 
+# IBKR inštancia vyradená 29. 7. 2026 (prevádzková réžia Gateway >> úžitok);
+# jej DB data/bot.db a kód bot.py ostávajú v repe ako archív.
 INSTANCES = [
-    {"key": "ibkr", "name": "IBKR paper", "db": "data/bot.db",
-     "script": "bot.py", "log": "data/bot.log", "ccy": "USD",
-     "note": "Grid25-G2B · 25k · cap 20+10"},
     {"key": "ctrader", "name": "cTrader demo", "db": "data/bot_ctrader.db",
      "script": "bot_ctrader.py", "log": "data/bot_ctrader.log", "ccy": "EUR",
      "note": "Grid25-G2B-CT · 2k · cap 20 + G8"},

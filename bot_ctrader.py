@@ -57,6 +57,10 @@ class CTraderBotConfig:
     QTY: float = 2_000
     CAP_BASE: int = 20             # G3_cap20 — bez rezervných úrovní
     CAP_RESERVE: int = 0
+    P500_SIGNALS: bool = True      # zrkadliace signály pre Plus500 (TG)
+    P500_SIGNAL_QTY: float = 10_000
+    BRIEFING_HOUR: int = 8         # ranný briefing 8–10 h
+    BRIEFING_HOUR_END: int = 10
     S7_ENABLED: bool = False    # NEPREŠIEL nezávislým overením — viď trading/strategy_s7.py
     S7_QTY: float = 2_000
     FAILSAFE_BAND: float = 0.02    # G8 poistka
@@ -141,6 +145,7 @@ class CTraderBot:
         self.daily_closes: list[float] = []
         self._daily_day = ""
         self.failsafe = False
+        self._brief_date = self.db.meta_get("brief_date", "")
 
     # ------------------------------------------------------------------ #
     def _guard_demo(self) -> None:
@@ -311,6 +316,7 @@ class CTraderBot:
             self._aggregate_bar(px["mid"])
         self._poll_closes()
         self._enforce_time_stops()
+        self._morning_briefing(px["mid"] if px else None)
         self._daily_snapshot()
         self.macro.refresh()
         if self.commands_enabled:
@@ -488,8 +494,76 @@ class CTraderBot:
                      f"{sig.qty:,.0f} {self.cfg.SYMBOL} @ {res['price']:.5f}\n"
                      f"TP {sig.tp_price:.5f}{sl_txt} (na serveri)\n"
                      f"dôvod: {sig.reason}")
+        if self.cfg.P500_SIGNALS:
+            self.tg.send(self._p500_open_msg(trade_id, sig.side, res["price"],
+                                             sig.tp_price, sig.sl_price))
         log.info("OTVORENÉ %s @ %.5f (pozícia %s, db #%d)",
                  sig.side, res["price"], res["position_id"], trade_id)
+
+    def _p500_open_msg(self, trade_id: int, side: str, entry: float,
+                       tp: float, sl: float = 0.0) -> str:
+        q = self.cfg.P500_SIGNAL_QTY
+        smer = "🔺 <b>KÚPIŤ</b>" if side == "long" else "🔻 <b>PREDAŤ</b>"
+        zisk = abs(tp - entry) * q / tp
+        sl_line = (f"🛑 Zavrieť pri strate: <code>{sl:.5f}</code>\n"
+                   if sl else "🚫 Stop Loss: nenastavuj\n")
+        return (f"🟠 <b>P500 SIGNÁL #{trade_id} — OTVOR</b>\n"
+                f"━━━━━━━━━━━━━━━\n"
+                f"{smer} EUR/USD\n"
+                f"Čiastka: <b>{q:,.0f}</b>\n"
+                f"Trhová cena teraz: ~<code>{entry:.5f}</code>\n"
+                f"━━━━━━━━━━━━━━━\n"
+                f"Po otvorení nastav:\n"
+                f"🎯 Zavrieť pri zisku: <code>{tp:.5f}</code>\n"
+                f"{sl_line}"
+                f"Očakávaný zisk pri cieli: ~{zisk:.2f} €")
+
+    def _p500_close_msg(self, trade_id: int, side: str, entry: float,
+                        exit_price: float) -> str:
+        q = self.cfg.P500_SIGNAL_QTY
+        zisk = (exit_price - entry) * q / exit_price if side == "long" \
+            else (entry - exit_price) * q / exit_price
+        return (f"🟢 <b>P500 SIGNÁL #{trade_id} — ZATVORENÉ</b>\n"
+                f"━━━━━━━━━━━━━━━\n"
+                f"{side.upper()} z <code>{entry:.5f}</code> skončil na "
+                f"<code>{exit_price:.5f}</code>.\n"
+                f"Ak máš nastavené „Zavrieť pri zisku/strate“, pozícia sa "
+                f"zatvorila sama — skontroluj v appke.\n"
+                f"Očakávaný výsledok: {zisk:+.2f} € na {q:,.0f}")
+
+    def _morning_briefing(self, mid: float | None) -> None:
+        now = datetime.now(self.tz)
+        today = now.strftime("%Y-%m-%d")
+        if (not self.cfg.BRIEFING_HOUR <= now.hour < self.cfg.BRIEFING_HOUR_END
+                or self._brief_date == today):
+            return
+        self._brief_date = today
+        self.db.meta_set("brief_date", today)
+        try:
+            bal = self.broker.account_summary()["balance"]
+        except CTraderError:
+            bal = 0.0
+        rows = self.db.open_trades()
+        floating = 0.0
+        if mid:
+            for r in rows:
+                floating += ((mid - r["entry_price"]) if r["side"] == "long"
+                             else (r["entry_price"] - mid)) * r["qty"]
+        from datetime import timedelta
+        yesterday = (now - timedelta(days=1)).strftime("%Y-%m-%d")
+        cycles = self.db.cycles_on_day(yesterday)
+        events = self.macro.todays_events(self.tz)
+        ev = "\n".join(f"  • {datetime.fromtimestamp(e['ts'], self.tz):%H:%M} "
+                        f"{e['currency']} {e['title']}" for e in events) \
+            or "  (žiadne)"
+        longs = sum(1 for r in rows if r["side"] == "long")
+        self.tg.send(f"☀️ <b>Ranný briefing</b> {now:%d.%m.%Y}\n"
+                     f"Balance: {bal:,.2f} € | floating {floating:+,.2f}\n"
+                     f"Pozície: {len(rows)} (long {longs} / short "
+                     f"{len(rows) - longs})\n"
+                     + (f"Kurz: {mid:.5f}\n" if mid else "")
+                     + f"Včerajšie cykly: {cycles}\n"
+                     f"Dnešné high-impact udalosti:\n{ev}")
 
     def _poll_closes(self) -> None:
         now = time.time()
@@ -566,6 +640,9 @@ class CTraderBot:
                      f"{close_price:.5f}{note}\n"
                      f"P/L <b>{pnl:+.2f}</b> (swap {swap:+.2f}, provízie "
                      f"−{comm:.2f}; reálne čísla z dealu)")
+        if self.cfg.P500_SIGNALS:
+            self.tg.send(self._p500_close_msg(db_id, row["side"],
+                                              row["entry_price"], close_price))
         log.info("ZAVRETÉ db #%d %s @ %.5f, P/L %+.2f%s",
                  db_id, row["side"], close_price, pnl, note)
 
