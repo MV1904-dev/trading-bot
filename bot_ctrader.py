@@ -43,6 +43,7 @@ from trading.macro import MacroCalendar
 from trading.strategy_base import Bar, Signal
 from trading.strategy_grid25 import Grid25, Grid25Config
 from trading.strategy_s7 import S7Config, S7Continuation
+from trading.shadow_judge import ShadowJudge
 from trading.tg import Telegram
 
 ROOT = Path(__file__).resolve().parent
@@ -122,6 +123,8 @@ class CTraderBot:
         s7.enabled = cfg.S7_ENABLED
         self.strategies = [grid, s7]
         self.strategy = grid          # spätná kompatibilita (kotvy, status)
+        self.judge = ShadowJudge(cfg.DB_PATH,
+                                 os.getenv("ANTHROPIC_API_KEY", ""))
         self.macro = MacroCalendar(cfg.CALENDAR_CACHE)
 
         self._tfs = sorted({s.timeframe_s for s in self.strategies if s.enabled})
@@ -233,6 +236,11 @@ class CTraderBot:
                 bars = bars[:-1]                        # posledný bar je neúplný
             self._atr[tf] = self._calc_atr(bars, self.cfg.ATR_PERIOD)
             self._atr_prev[tf] = bars[-1].close if bars else None
+            if tf == self._tfs[0]:
+                try:
+                    self.judge.bootstrap_candles(bars)
+                except Exception:  # noqa: BLE001
+                    log.exception("ShadowJudge bootstrap zlyhal")
             for s in self.strategies:
                 if s.enabled and s.timeframe_s == tf:
                     s.warmup(bars)
@@ -295,6 +303,7 @@ class CTraderBot:
     def _tick(self) -> None:
         px = self._price()
         if px is not None:
+            self.judge.on_price(px["mid"])
             self._update_failsafe_daily(px["mid"])
             self._aggregate_bar(px["mid"])
         self._poll_closes()
@@ -422,6 +431,17 @@ class CTraderBot:
 
     def _execute(self, sig: Signal, bar: Bar) -> None:
         reason = self._blocked_reason()
+        open_rows = self.db.open_trades()
+        jid = self.judge.submit(
+            sig.strategy_id, sig.side, bar.close, sig.tp_price,
+            getattr(sig, "sl_price", 0.0), 0.0,
+            {"long": sum(1 for r in open_rows if r["side"] == "long"),
+             "short": sum(1 for r in open_rows if r["side"] == "short")},
+            0.0,
+            [f"{datetime.fromtimestamp(e['ts'], self.tz):%H:%M} "
+             f"{e['currency']} {e['title']}"
+             for e in self.macro.todays_events(self.tz)],
+            blocked=reason or "")
         if reason:
             self.db.log_signal(sig.strategy_id, sig.side, bar.close,
                                0.0, 0.0, "blocked", reason, sig.context)
@@ -442,6 +462,7 @@ class CTraderBot:
         trade_id = self.db.open_trade(
             sig.strategy_id, sig.side, sig.qty, res["price"], sig.tp_price,
             res["position_id"], res["order_id"], 0.0, ctx)
+        self.judge.link(jid, trade_id)
         for s in self.strategies:
             if s.id == sig.strategy_id:
                 s.on_trade_opened(trade_id, sig.side, res["price"])

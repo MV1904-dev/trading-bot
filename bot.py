@@ -36,6 +36,7 @@ from trading.macro import MacroCalendar
 from trading.rates import daily_funding_usd
 from trading.strategy_base import Bar, Signal
 from trading.strategy_grid25 import Grid25
+from trading.shadow_judge import ShadowJudge
 from trading.tg import Telegram
 
 log = logging.getLogger("bot")
@@ -56,6 +57,8 @@ class Bot:
         self.broker = IBKRBroker(host=cfg.HOST, port=cfg.PORT,
                                  client_id=cfg.CLIENT_ID)
         self.strategies = [Grid25()]          # ďalšie stratégie sem
+        self.judge = ShadowJudge(cfg.DB_PATH,
+                                 os.getenv("ANTHROPIC_API_KEY", ""))
 
         # runtime stav
         self.contract = None
@@ -191,6 +194,14 @@ class Bot:
             atr = atr * (n - 1) / n + tr / n
         self.atr = atr
         self._atr_prev_close = closes[-1]
+        try:
+            self.judge.bootstrap_candles([
+                {"time": ts.timestamp(), "o": o_, "h": h_, "l": l_, "c": c_}
+                for ts, o_, h_, l_, c_ in zip(df["date"], df["open"],
+                                              df["high"], df["low"],
+                                              df["close"])])
+        except Exception:  # noqa: BLE001 — sudca nesmie nič pokaziť
+            log.exception("ShadowJudge bootstrap zlyhal")
         log.info("ATR(%d, M5) bootstrap: %.6f (%d barov histórie).",
                  n, atr, len(df))
 
@@ -269,6 +280,7 @@ class Bot:
         self._watch_connection()
         mid = self._current_mid()
         if mid is not None:
+            self.judge.on_price(mid)
             self._aggregate_bar(mid)
             self._alarms(mid)
         self._check_tp_fills()
@@ -410,6 +422,17 @@ class Bot:
         spread = (self.ticker.ask - self.ticker.bid) \
             if (self.ticker and self.ticker.bid and self.ticker.ask) else 0.0
         reason = self._blocked_reason()
+        open_rows = self.db.open_trades()
+        jid = self.judge.submit(
+            sig.strategy_id, sig.side, bar.close, sig.tp_price,
+            getattr(sig, "sl_price", 0.0), self.atr or 0.0,
+            {"long": sum(1 for r in open_rows if r["side"] == "long"),
+             "short": sum(1 for r in open_rows if r["side"] == "short")},
+            self._floating_usd(bar.close),
+            [f"{datetime.fromtimestamp(e['ts'], self.tz):%H:%M} "
+             f"{e['currency']} {e['title']}"
+             for e in self.macro.todays_events(self.tz)],
+            blocked=reason or "")
         if reason:
             self.db.log_signal(sig.strategy_id, sig.side, bar.close,
                                self.atr or 0.0, spread, "blocked", reason,
@@ -462,6 +485,7 @@ class Bot:
         trade_id = self.db.open_trade(
             sig.strategy_id, sig.side, sig.qty, fill, tp_price,
             trade.order.orderId, 0, comm, ctx)
+        self.judge.link(jid, trade_id)
 
         tp_action = "SELL" if sig.side == "long" else "BUY"
         tp_order = LimitOrder(tp_action, sig.qty, tp_price)
