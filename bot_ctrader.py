@@ -28,7 +28,9 @@ import csv as _csv
 import json
 import logging
 import os
+import queue
 import sys
+import threading
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -103,7 +105,12 @@ class CTraderBot:
         self.tg = PrefixedTelegram(
             own_token or os.getenv("TELEGRAM_BOT_TOKEN", ""),
             os.getenv("TELEGRAM_CHAT_ID", ""), cfg.TG_PREFIX)
-        self.commands_enabled = bool(own_token)
+        # getUpdates je exkluzívny — dvaja odberatelia si updaty kradnú. Kým
+        # bežal IBKR bot na tom istom tokene, príkazy tu museli byť vypnuté.
+        # IBKR je vyradený (29. 7.), takže zdieľaný token stačí; vlastný token
+        # má prednosť a CTRADER_TG_COMMANDS=0 je vypínač, ak by IBKR ožil.
+        self.commands_enabled = (self.tg.enabled
+                                 and os.getenv("CTRADER_TG_COMMANDS", "1") != "0")
         if self.commands_enabled:
             self.tg.offset = int(self.db.meta_get("tg_offset", "0") or 0)
 
@@ -150,6 +157,9 @@ class CTraderBot:
         self._daily_day = ""
         self.failsafe = False
         self._brief_date = self.db.meta_get("brief_date", "")
+        self._stop = threading.Event()
+        self._cmd_queue: queue.Queue = queue.Queue()
+        self._saved_offset = self.tg.offset
 
     # ------------------------------------------------------------------ #
     def _guard_demo(self) -> None:
@@ -179,6 +189,7 @@ class CTraderBot:
                      f"Balance: {acct['balance']:,.2f}\n"
                      + self._config_line())
         self.db.log_event("info", "ctrader bot štart")
+        self._start_command_thread()
 
         deadline = time.time() + run_minutes * 60 if run_minutes else None
         try:
@@ -196,6 +207,7 @@ class CTraderBot:
         except KeyboardInterrupt:
             self.tg.send("🛑 cTrader bot zastavený (Ctrl-C).")
         finally:
+            self._stop.set()
             if self.commands_enabled:
                 self.db.meta_set("tg_offset", self.tg.offset)
             self.broker.disconnect()
@@ -323,9 +335,7 @@ class CTraderBot:
         self._morning_briefing(px["mid"] if px else None)
         self._daily_snapshot()
         self.macro.refresh()
-        if self.commands_enabled:
-            self.tg.poll_commands(self._handle_command)
-            self.db.meta_set("tg_offset", self.tg.offset)
+        self._drain_commands()
 
     def _price(self) -> dict | None:
         q = self.broker.quote()
@@ -339,6 +349,54 @@ class CTraderBot:
             self.auto_paused = False
             self.tg.send("✅ Stream znovu beží, pauza zrušená.")
         return q
+
+    # --- Telegram príkazy ---------------------------------------------------
+    def _start_command_thread(self) -> None:
+        """Polling beží vo vlastnom vlákne, aby ho obchodná slučka nemohla
+        zablokovať (broker volania majú timeout 15–20 s). Vlákno len číta
+        frontu; /pauza a /start (atomický flag) vybaví hneď, ostatné odovzdá
+        obchodnému vláknu — tam sa číta DB a stav stratégií, takže sa nič
+        nemutuje z dvoch vlákien naraz."""
+        if not self.commands_enabled:
+            log.info("TG príkazy vypnuté (CTRADER_TG_COMMANDS=0).")
+            return
+
+        def loop() -> None:
+            while not self._stop.is_set():
+                try:
+                    self.tg.poll_commands(self._on_command_async, timeout=25)
+                except Exception:  # noqa: BLE001 — vlákno musí prežiť všetko
+                    log.exception("Chyba v polling vlákne príkazov")
+                    self._stop.wait(10)
+
+        threading.Thread(target=loop, name="tg-commands", daemon=True).start()
+        log.info("TG príkazy zapnuté (polling vo vlastnom vlákne).")
+
+    def _on_command_async(self, cmd: str, args: str) -> None:
+        """Beží v polling vlákne. /pauza a /start menia jediný float
+        (paused_until), takže ich vybavíme hneď — musia fungovať aj keď
+        obchodná slučka viazne. Zvyšok číta DB a stav stratégií → do fronty
+        pre obchodné vlákno."""
+        if cmd in ("/pauza", "/start"):
+            self._handle_command(cmd, args)
+            return
+        self._cmd_queue.put((cmd, args))
+
+    def _drain_commands(self) -> None:
+        """Beží v obchodnom vlákne (z _tick)."""
+        while True:
+            try:
+                cmd, args = self._cmd_queue.get_nowait()
+            except queue.Empty:
+                break
+            try:
+                self._handle_command(cmd, args)
+            except Exception as exc:  # noqa: BLE001
+                log.exception("Chyba pri spracovaní príkazu %s", cmd)
+                self.tg.send(f"⚠️ Chyba príkazu {cmd}: {exc}")
+        if self.commands_enabled and self.tg.offset != self._saved_offset:
+            self._saved_offset = self.tg.offset
+            self.db.meta_set("tg_offset", self.tg.offset)
 
     def _check_suspend(self) -> None:
         """Zachytí uspatie stroja (macOS sleep). Slučka tiká každých

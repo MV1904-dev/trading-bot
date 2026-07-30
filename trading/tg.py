@@ -49,15 +49,19 @@ class Telegram:
             "disable_notification": "true" if silent else "false",
         })
 
-    def poll_commands(self, handler: Callable[[str, str], None]) -> None:
-        """Krátky poll getUpdates; handler(command, args) pre každý príkaz.
+    def poll_commands(self, handler: Callable[[str, str], None],
+                      timeout: int = 0) -> None:
+        """getUpdates; handler(command, args) pre každý príkaz.
 
+        timeout > 0 = long poll (spojenie drží TG, kým nepríde správa) —
+        šetrí volania a reaguje okamžite; vhodné z vlastného vlákna.
         Reaguje len na správy zo zadaného chat_id (ochrana pred cudzími).
         """
         if not self.enabled:
             return
         resp = self._api("getUpdates",
-                         {"offset": self.offset + 1, "timeout": 0}, timeout=10)
+                         {"offset": self.offset + 1, "timeout": timeout},
+                         timeout=timeout + 10)
         if not resp or not resp.get("ok"):
             return
         for upd in resp.get("result", []):
