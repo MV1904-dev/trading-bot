@@ -54,9 +54,11 @@ log = logging.getLogger("bot_ctrader")
 class CTraderBotConfig:
     DEMO: bool = True              # natvrdo; live = vedomá zmena + env potvrdenie
     SYMBOL: str = "EURUSD"
-    QTY: float = 2_000
-    CAP_BASE: int = 20             # G3_cap20 — bez rezervných úrovní
-    CAP_RESERVE: int = 0
+    QTY: float = 10_000
+    CAP_BASE: int = 20             # lab G2B kapacita 20+10
+    CAP_RESERVE: int = 10
+    STEP_SHORT: float = 0.0015     # lab G2B geometria
+    STEP_LONG: float = 0.00225
     P500_SIGNALS: bool = True      # zrkadliace signály pre Plus500 (TG)
     P500_SIGNAL_QTY: float = 10_000
     BRIEFING_HOUR: int = 8         # ranný briefing 8–10 h
@@ -121,7 +123,9 @@ class CTraderBot:
             self.db.log_event("alarm", f"token refresh zlyhal: {err}"))
 
         grid = Grid25(Grid25Config(qty=cfg.QTY, base_levels=cfg.CAP_BASE,
-                                   reserve_levels=cfg.CAP_RESERVE))
+                                   reserve_levels=cfg.CAP_RESERVE,
+                                   step_short=cfg.STEP_SHORT,
+                                   step_long=cfg.STEP_LONG))
         grid.id = "Grid25-G2B-CT"
         s7 = S7Continuation(S7Config(qty=cfg.S7_QTY))
         s7.enabled = cfg.S7_ENABLED
@@ -172,9 +176,8 @@ class CTraderBot:
         self.tg.send(f"🤖 <b>cTrader bot {'reštartovaný' if restarted else 'spustený'}</b> "
                      f"(demo, {self.cfg.SYMBOL})\n"
                      + "\n".join(s.status_line() for s in self.strategies) + "\n"
-                     f"Balance: {acct['balance']:,.2f} | pozícia "
-                     f"{self.cfg.QTY:,.0f}, kapacita {self.cfg.CAP_BASE}/smer "
-                     f"+ G8 poistka")
+                     f"Balance: {acct['balance']:,.2f}\n"
+                     + self._config_line())
         self.db.log_event("info", "ctrader bot štart")
 
         deadline = time.time() + run_minutes * 60 if run_minutes else None
@@ -531,6 +534,13 @@ class CTraderBot:
                 f"zatvorila sama — skontroluj v appke.\n"
                 f"Očakávaný výsledok: {zisk:+.2f} € na {q:,.0f}")
 
+    def _config_line(self) -> str:
+        g = self.strategy.cfg
+        return (f"⚙️ G2B {g.qty:,.0f} | krok +{g.step_short:.2%}/−{g.step_long:.3%} "
+                f"| TP {g.tp_pct:.2%} | pásma {g.band_low:.2f}–{g.band_high:.2f} "
+                f"| kapacita {g.base_levels}+{g.reserve_levels} | blackout ±30 min "
+                f"| G8 poistka | S7 {'ON' if self.cfg.S7_ENABLED else 'off'}")
+
     def _morning_briefing(self, mid: float | None) -> None:
         now = datetime.now(self.tz)
         today = now.strftime("%Y-%m-%d")
@@ -563,6 +573,7 @@ class CTraderBot:
                      f"{len(rows) - longs})\n"
                      + (f"Kurz: {mid:.5f}\n" if mid else "")
                      + f"Včerajšie cykly: {cycles}\n"
+                     + self._config_line() + "\n"
                      f"Dnešné high-impact udalosti:\n{ev}")
 
     def _poll_closes(self) -> None:
