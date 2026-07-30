@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import argparse
 import csv as _csv
+import html
 import json
 import logging
 import os
@@ -794,6 +795,24 @@ class CTraderBot:
         elif cmd == "/start":
             self.paused_until = 0.0
             self.tg.send("▶️ Vstupy povolené.")
+        elif cmd in ("/help", "/pomoc"):
+            self.tg.send(self._commands_help())
+        else:
+            # Bez tejto vetvy bot na preklep ticho mlčal a vyzeralo to ako
+            # výpadok pollingu. Príkaz ide od používateľa a správy chodia
+            # s parse_mode=HTML, takže ho treba escapovať — inak by "/<b"
+            # zhodilo sendMessage na chybe 400 a bot by mlčal znova.
+            self.tg.send(f"❓ Neznámy príkaz <code>{html.escape(cmd)}</code>.\n\n"
+                         + self._commands_help())
+
+    @staticmethod
+    def _commands_help() -> str:
+        return ("<b>Dostupné príkazy</b>\n"
+                "/stav — balance, počet pozícií, poistka, stav vstupov\n"
+                "/pozicie — zoznam otvorených pozícií s TP\n"
+                "/pauza [30m|2h] — pozastaví vstupy (default 60 min)\n"
+                "/start — zruší pauzu\n"
+                "/help — tento zoznam")
 
 
 def main() -> int:
