@@ -343,7 +343,7 @@ def run_variant(bars: Bars, atr: np.ndarray, v: Variant) -> Result:
             ndays = (day - prev_day).days
             diff = rate_diff(dkey)
             long_pa = max(diff + FUNDING_MARKUP, 0.0) / 100.0
-            short_pa = max(diff - FUNDING_MARKUP, 0.0) / 100.0
+            short_pa = (diff - FUNDING_MARKUP) / 100.0   # bez flooru: short môže platiť
             f_usd = (-long_pa * sum(size * c for _ in longs)
                      + short_pa * sum(size * c for _ in shorts)) * ndays / 365.0
             funding += f_usd / c

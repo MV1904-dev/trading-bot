@@ -2,7 +2,10 @@
 
 Rovnaká tabuľka ako v backtest_v2.py (mesačná granularita, oficiálne sadzby:
 Fed horná hranica pásma, ECB depozitná). Long EURUSD platí (Fed − ECB + 1 %)
-p.a., short inkasuje max(Fed − ECB − 1 %, 0) p.a. — 1 % je broker prirážka.
+p.a., short inkasuje (Fed − ECB − 1 %) p.a. — 1 % je broker prirážka.
+Short strana NIE JE zafloorovaná na nule: keď je diff < prirážka (2013–15,
+2020–22) alebo ECB > Fed, short strana PLATÍ (záporný funding). Floor
+odstránený 30. 7. 2026 — dovtedy laby shortom nikdy neúčtovali swap.
 """
 
 from __future__ import annotations
@@ -47,9 +50,11 @@ def rate_diff(day: str) -> float:
 
 
 def funding_rates_pa(day: str) -> tuple[float, float]:
-    """(long_platí, short_inkasuje) v % p.a. k danému dňu."""
+    """(long_platí, short_inkasuje) v % p.a. k danému dňu.
+
+    Short hodnota môže byť záporná — vtedy short PLATÍ."""
     diff = rate_diff(day)
-    return max(diff + FUNDING_MARKUP, 0.0), max(diff - FUNDING_MARKUP, 0.0)
+    return max(diff + FUNDING_MARKUP, 0.0), diff - FUNDING_MARKUP
 
 
 def daily_funding_usd(day: str, side: str, qty: float, price: float) -> float:
