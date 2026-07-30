@@ -96,8 +96,9 @@ def fill_cost_usd(cm: CostModel, qty: float, price: float) -> tuple[float, float
 class FineCfg:
     qty: float
     step_s: float
-    tp: float                    # absolútne TP %; pri tp_mode="step" == step_s
+    tp: float                    # short TP %; pri tp_mode="step" == step_s
     tp_mode: str                 # "step" | "fix10"
+    tp_long: float | None = None  # long TP %; None = rovnaké ako tp
     step_l_ratio: float = 1.5
     cap_base: int = 20
     cap_reserve: int = 10
@@ -129,6 +130,12 @@ class FMetrics:
     underwater_days: float = 0.0
     open_end: int = 0
     failsafe_days: int = 0
+    funding_long: float = 0.0    # EUR per smer (záporné = platí)
+    funding_short: float = 0.0
+    closes_long: int = 0
+    closes_short: int = 0
+    hold_sum_long: float = 0.0   # sekundy visenia zavretých pozícií
+    hold_sum_short: float = 0.0
 
     @property
     def cost_ratio(self) -> float:
@@ -142,7 +149,7 @@ class FMetrics:
 # ===========================================================================
 
 def run_fine(p: Prepared, dctx: DailyCtx, cfg: FineCfg, cm: CostModel,
-             failsafe: bool) -> FMetrics:
+             failsafe: bool, trace: list | None = None) -> FMetrics:
     b, atr = p.bars, p.atr
     m = FMetrics()
     realized = 0.0
@@ -170,38 +177,46 @@ def run_fine(p: Prepared, dctx: DailyCtx, cfg: FineCfg, cm: CostModel,
         if di != prev_day and prev_day >= 0 and di >= 0:
             day = dctx.days[di]
             nd = max(di - prev_day, 1) if p.name.startswith("IBKR") else 1
-            for e, q, _tp in longs:
-                m.funding += daily_funding_usd(day, "long", q, c) * nd / c
-            for e, q, _tp in shorts:
-                m.funding += daily_funding_usd(day, "short", q, c) * nd / c
+            for e, q, *_ in longs:
+                f = daily_funding_usd(day, "long", q, c) * nd / c
+                m.funding += f
+                m.funding_long += f
+            for e, q, *_ in shorts:
+                f = daily_funding_usd(day, "short", q, c) * nd / c
+                m.funding += f
+                m.funding_short += f
         if di >= 0:
             prev_day = di
 
         if longs:
             keep = []
-            for e, q, tp in longs:
+            for e, q, tp, t0 in longs:
                 if h >= tp:
                     gross = (tp - e) * q / tp
                     m.gross_win += max(gross, 0.0)
                     realized += gross - fill_cost(q, tp)
                     m.trades += 1
                     m.wins += 1
+                    m.closes_long += 1
+                    m.hold_sum_long += t - t0
                 else:
-                    keep.append((e, q, tp))
+                    keep.append((e, q, tp, t0))
             longs = keep
             if not longs:
                 ref_l = c
         if shorts:
             keep = []
-            for e, q, tp in shorts:
+            for e, q, tp, t0 in shorts:
                 if l <= tp:
                     gross = (e - tp) * q / tp
                     m.gross_win += max(gross, 0.0)
                     realized += gross - fill_cost(q, tp)
                     m.trades += 1
                     m.wins += 1
+                    m.closes_short += 1
+                    m.hold_sum_short += t - t0
                 else:
-                    keep.append((e, q, tp))
+                    keep.append((e, q, tp, t0))
             shorts = keep
             if not shorts:
                 ref_s = c
@@ -235,9 +250,12 @@ def run_fine(p: Prepared, dctx: DailyCtx, cfg: FineCfg, cm: CostModel,
                           or abs(c - last_l) > 2.0 * a)
                 if drop >= trigger and unlock:
                     k = int(drop / (ref_l * step_l)) if step_l > 0 else 1
-                    tp = c * (1 + step_l) if k >= 2 else c * (1 + cfg.tp)
+                    tp_l = cfg.tp_long if cfg.tp_long is not None else cfg.tp
+                    tp = c * (1 + step_l) if k >= 2 else c * (1 + tp_l)
                     realized -= fill_cost(cfg.qty, c)
-                    longs.append((c, cfg.qty, tp))
+                    longs.append((c, cfg.qty, tp, t))
+                    if trace is not None:
+                        trace.append((t, "L", round(c, 5), round(tp, 5)))
                     last_l = c
                     ref_l = c
             if allow_short and len(shorts) < cap_s:
@@ -248,13 +266,15 @@ def run_fine(p: Prepared, dctx: DailyCtx, cfg: FineCfg, cm: CostModel,
                     k = int(rise / (ref_s * cfg.step_s))
                     tp = c * (1 - cfg.step_s) if k >= 2 else c * (1 - cfg.tp)
                     realized -= fill_cost(cfg.qty, c)
-                    shorts.append((c, cfg.qty, tp))
+                    shorts.append((c, cfg.qty, tp, t))
+                    if trace is not None:
+                        trace.append((t, "S", round(c, 5), round(tp, 5)))
                     last_s = c
                     ref_s = c
 
-        float_eur = (sum((c - e) * q for e, q, _ in longs)
-                     + sum((e - c) * q for e, q, _ in shorts)) / c
-        expo = sum(q for _, q, _ in longs) + sum(q for _, q, _ in shorts)
+        float_eur = (sum((c - e) * q for e, q, *_ in longs)
+                     + sum((e - c) * q for e, q, *_ in shorts)) / c
+        expo = sum(q for _, q, *_ in longs) + sum(q for _, q, *_ in shorts)
         m.worst_float = max(m.worst_float, -float_eur)
         m.max_expo = max(m.max_expo, expo)
         equity = realized + float_eur
@@ -267,8 +287,8 @@ def run_fine(p: Prepared, dctx: DailyCtx, cfg: FineCfg, cm: CostModel,
         m.min_cap = max(m.min_cap, expo / LEVERAGE - equity)
 
     c_end = b.close[-1]
-    float_eur = (sum((c_end - e) * q for e, q, _ in longs)
-                 + sum((e - c_end) * q for e, q, _ in shorts)) / c_end
+    float_eur = (sum((c_end - e) * q for e, q, *_ in longs)
+                 + sum((e - c_end) * q for e, q, *_ in shorts)) / c_end
     if peak_t is not None:
         m.underwater_days = max(m.underwater_days, (b.t[-1] - peak_t) / 86400)
     m.pnl = realized + float_eur
