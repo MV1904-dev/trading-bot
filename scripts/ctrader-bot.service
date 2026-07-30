@@ -1,0 +1,60 @@
+# Produkčný beh cTrader bota na Hetzneri (62.238.48.134). Nasadenie:
+#
+#     scp scripts/ctrader-bot.service hetzner:/etc/systemd/system/
+#     ssh hetzner 'systemctl daemon-reload && systemctl restart ctrader-bot'
+#
+# Tento súbor je zdroj pravdy — na serveri má byť jeho presná kópia.
+# Netrackované súbory, ktoré clone nedodá a treba ich preniesť cez scp:
+# .env, data/bot_ctrader.db, data/ibkr_EURUSD_M5.csv (bez neho je G8
+# poistka ticho mŕtva — viď bot_ctrader.py:473), data/ff_calendar.json.
+
+[Unit]
+Description=cTrader grid bot (Grid25-G2B-CT)
+Documentation=https://github.com/MV1904-dev/trading-bot
+After=network-online.target
+Wants=network-online.target
+
+# Bez tohto sa systemd po 5 štartoch za 10 s vzdá a bot ostane mŕtvy.
+# Wrapper na Macu sa nevzdával nikdy — držíme rovnaké správanie.
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=marian
+Group=marian
+WorkingDirectory=/home/marian/trading-bot
+
+# BOT_RESTARTED=0 pri prvom štarte, 1 po páde — bot podľa toho rozlíši
+# "spustený" a "reštartovaný" v Telegram hláške. Marker žije v /run;
+# RuntimeDirectoryPreserve=restart ho drží cez auto-reštarty, ale zmaže
+# ho pri explicitnom systemctl stop.
+RuntimeDirectory=ctrader-bot
+RuntimeDirectoryPreserve=restart
+ExecStart=/bin/sh -c 'if [ -e "$RUNTIME_DIRECTORY/started" ]; then BOT_RESTARTED=1; else BOT_RESTARTED=0; fi; touch "$RUNTIME_DIRECTORY/started"; export BOT_RESTARTED; exec /home/marian/trading-bot/.venv/bin/python -u bot_ctrader.py'
+
+# Bot upratuje v KeyboardInterrupt (uloží tg_offset, odpojí brokera).
+# SIGTERM by ten blok preskočil, preto systemctl stop posiela SIGINT.
+KillSignal=SIGINT
+TimeoutStopSec=45
+
+# Kód 0 = čistý koniec, 130 = SIGINT. Oboje je zámerné zastavenie, nie pád.
+SuccessExitStatus=130
+Restart=on-failure
+RestartSec=15
+RestartSteps=5
+RestartMaxDelaySec=300
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=ctrader-bot
+
+# Server nespí, takže caffeinate odpadá; watchdog na zamrznutie procesu
+# ostáva v kóde ako poistka proti mŕtvemu TCP spojeniu na Spotware.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=read-only
+ReadWritePaths=/home/marian/trading-bot
+
+[Install]
+WantedBy=multi-user.target
