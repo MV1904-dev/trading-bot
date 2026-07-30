@@ -6,6 +6,16 @@ cd "$(dirname "$0")/.."
 PY=".venv/bin/python"
 [[ -x "$PY" ]] || PY="python3"
 
+# macOS uspáva stroj (na batérii už po 1 min nečinnosti) → TCP spojenie na
+# Spotware zomrie a bot to vidí ako "stream mŕtvy". caffeinate drží idle-sleep
+# assertion presne po dobu behu bota (-w PID), takže sa nemení nič globálne.
+# POZOR: -s (system sleep) platí len na napájaní zo siete; na batérii ani
+# caffeinate nezabráni spánku po zavretí veka.
+CAFF=()
+if command -v caffeinate >/dev/null 2>&1; then
+  CAFF=(caffeinate -dims)   # pole — zsh nerobí word-splitting na "$CAFF"
+fi
+
 if [[ -f .env ]]; then
   export $(grep -E '^(CTRADER_)?TELEGRAM_(BOT_TOKEN|CHAT_ID)=' .env | xargs) 2>/dev/null
 fi
@@ -26,9 +36,9 @@ while true; do
   started=$(date +%s)
   if [[ $first -eq 1 ]]; then
     first=0
-    BOT_RESTARTED=0 "$PY" bot_ctrader.py "$@"
+    BOT_RESTARTED=0 "${CAFF[@]}" "$PY" bot_ctrader.py "$@"
   else
-    BOT_RESTARTED=1 "$PY" bot_ctrader.py "$@"
+    BOT_RESTARTED=1 "${CAFF[@]}" "$PY" bot_ctrader.py "$@"
   fi
   code=$?
   if [[ $code -eq 0 || $code -eq 130 ]]; then

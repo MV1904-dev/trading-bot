@@ -183,6 +183,7 @@ class CTraderBot:
         deadline = time.time() + run_minutes * 60 if run_minutes else None
         try:
             while True:
+                self._check_suspend()
                 try:
                     self._tick()
                 except Exception:  # noqa: BLE001
@@ -338,6 +339,31 @@ class CTraderBot:
             self.auto_paused = False
             self.tg.send("✅ Stream znovu beží, pauza zrušená.")
         return q
+
+    def _check_suspend(self) -> None:
+        """Zachytí uspatie stroja (macOS sleep). Slučka tiká každých
+        TICK_SECONDS; skok o rád viac znamená, že proces bol zmrazený a
+        TCP spojenie je po prebudení mŕtve, aj keď to socket ešte nevie.
+        Bez tohto sa čaká 3 min na re-subscribe a 15 min na tvrdý reštart —
+        po prebudení zbytočne dlho. Reconnectneme hneď a časovače nulujeme,
+        aby uspatie nespustilo falošný alarm mŕtveho streamu."""
+        now = time.time()
+        prev = getattr(self, "_last_loop_ts", None)
+        self._last_loop_ts = now
+        gap = now - prev if prev else 0.0
+        if gap < max(self.cfg.TICK_SECONDS * 6, 60.0):
+            return
+        log.warning("Slučka stála %.0f s (uspatie stroja?) — obnovujem "
+                    "spojenie.", gap)
+        self.db.log_event("warn", f"proces zmrazený {gap / 60:.0f} min "
+                                  f"(uspatie stroja), reconnect")
+        try:
+            self.broker.reconnect()
+            log.info("Spojenie obnovené po prebudení.")
+        except Exception as exc:  # noqa: BLE001
+            log.warning("Reconnect po prebudení zlyhal: %s", exc)
+        self.last_md_ts = time.time()
+        self._last_resub = 0.0
 
     def _maybe_reconnect(self) -> None:
         """Trojstupňová obrana mŕtveho streamu:
