@@ -554,7 +554,7 @@ class CTraderBot:
                 if not s.enabled or s.timeframe_s != tf:
                     continue
                 for sig in s.on_bar(closed, self._atr[tf]):
-                    self._execute(sig, closed)
+                    self._execute(sig, closed, self._atr[tf])
                 if hasattr(s, "ref_long"):
                     self.db.meta_set(f"ref:{s.id}",
                                      f"{s.ref_long or 0}|{s.ref_short or 0}")
@@ -570,15 +570,27 @@ class CTraderBot:
             return f"makro blackout: {ev['currency']} {ev['title']} o {t}"
         return None
 
-    def _execute(self, sig: Signal, bar: Bar) -> None:
+    def _execute(self, sig: Signal, bar: Bar,
+                 atr: float | None = None) -> None:
         reason = self._blocked_reason()
         open_rows = self.db.open_trades()
+        # ATR aj floating sa sem posielali natvrdo ako 0.0. Sudca to
+        # správne označil za nemožnú hodnotu a vetoval každý signál —
+        # 30 z 30. Posielame skutočné čísla, ktoré bot aj tak má.
+        q = self.broker.quote()
+        mid = q["mid"] if q else None
+        floating = 0.0
+        if mid is not None:
+            for r in open_rows:
+                floating += ((mid - r["entry_price"]) * r["qty"]
+                             if r["side"] == "long"
+                             else (r["entry_price"] - mid) * r["qty"])
         jid = self.judge.submit(
             sig.strategy_id, sig.side, bar.close, sig.tp_price,
-            getattr(sig, "sl_price", 0.0), 0.0,
+            getattr(sig, "sl_price", 0.0), atr or 0.0,
             {"long": sum(1 for r in open_rows if r["side"] == "long"),
              "short": sum(1 for r in open_rows if r["side"] == "short")},
-            0.0,
+            floating,
             [f"{datetime.fromtimestamp(e['ts'], self.tz):%H:%M} "
              f"{e['currency']} {e['title']}"
              for e in self.macro.todays_events(self.tz)],
