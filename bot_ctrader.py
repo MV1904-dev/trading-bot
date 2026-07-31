@@ -1013,6 +1013,9 @@ class CTraderBot:
         Snapshot stavia obchodné vlákno raz za tick, takže bez tohto by
         push spustený tlačidlom odoslal ešte stav spred pauzy a dashboard
         by až do ďalšieho ticku tvrdil, že sa nič nestalo.
+
+        _blocked_reason() sa smie volať aj odtiaľto — číta len pamäťové
+        atribúty a kalendár, nie SQLite (to je viazané na obchodné vlákno).
         """
         with self._sync_lock:
             state = self._sync_snap.get("state")
@@ -1020,6 +1023,9 @@ class CTraderBot:
                 state["paused"] = self.paused_until > time.time()
                 state["paused_until"] = (_iso_utc(self.paused_until)
                                          if self.paused_until else None)
+                # Bez tohto by po štarte ešte 10 s svietilo "vstupy
+                # blokované: manuálna pauza", hoci pauza už neplatí.
+                state["blocked_reason"] = self._blocked_reason() or None
 
     def _sb_pause(self, action: str, cmd: dict) -> None:
         """Beží v poller vlákne — mení jediný float, rovnako ako /pauza."""
