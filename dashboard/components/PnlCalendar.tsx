@@ -48,8 +48,7 @@ export default function PnlCalendar({ daily }: { daily: DailyCycle[] }) {
   );
 
   return (
-    <div className="card">
-      <span className="card-title">Denný P/L</span>
+    <div>
       <div className="mt-3 flex gap-1">
         <div className="flex flex-col gap-1 pr-1">
           {DAYS.map((d) => (

@@ -12,6 +12,7 @@
   --color-surface: var(--surface);
   --color-solid: var(--solid);
   --color-line: var(--line);
+  --color-hair: var(--hair);
   --color-ink: var(--ink);
   --color-muted: var(--muted);
   --color-faint: var(--faint);
@@ -20,62 +21,92 @@
   --color-warn: var(--warn);
   --color-long: var(--long);
   --color-short: var(--short);
+  --color-longbg: var(--longbg);
+  --color-shortbg: var(--shortbg);
 }
 
 :root {
   color-scheme: light;
-  --bg: #f4f4f5;
-  --surface: #ffffff;
+  --bg: #ffffff;
+  --surface: #f4f4f5;
   --solid: #ffffff;
-  --line: #e4e4e7;
+  --line: #d4d4d8;
+  --hair: #f0f0f1;
   --ink: #18181b;
   --muted: #52525b;
-  --faint: #71717a;
-  /* V svetlom režime musia byť P/L farby tmavšie, inak na bielej nemajú
-     kontrast; v tmavom naopak svetlejšie. */
-  --pos: #047857;
-  --neg: #be123c;
-  --warn: #b45309;
-  --long: #047857;
-  --short: #0369a1;
+  --faint: #8b8b93;
+  --pos: #0f6e56;
+  --neg: #a32d2d;
+  --warn: #854f0b;
+  --long: #0f6e56;
+  --short: #185fa5;
+  --longbg: #e1f5ee;
+  --shortbg: #e6f1fb;
 }
 
 .dark {
   color-scheme: dark;
-  --bg: #09090b;
-  --surface: rgb(24 24 27 / 0.6);
-  --solid: #18181b;
-  --line: #27272a;
-  --ink: #f4f4f5;
-  --muted: #a1a1aa;
-  --faint: #71717a;
-  --pos: #34d399;
-  --neg: #fb7185;
-  --warn: #fbbf24;
-  --long: #34d399;
-  --short: #38bdf8;
+  --bg: #141416;
+  --surface: #1e1e21;
+  --solid: #1e1e21;
+  --line: #2f2f33;
+  --hair: #232326;
+  --ink: #f1efe8;
+  --muted: #a9a9b0;
+  --faint: #75757d;
+  --pos: #5dcaa5;
+  --neg: #f09595;
+  --warn: #ef9f27;
+  --long: #5dcaa5;
+  --short: #85b7eb;
+  --longbg: #04342c;
+  --shortbg: #042c53;
 }
 
 body {
   @apply bg-bg text-ink antialiased;
 }
 
-/* V standalone režime na iPhone siaha obsah pod výrez aj pod domovskú
-   čiaru — spodná navigácia by inak končila pod ňou. */
-nav.bottom-nav {
+/* Bezpečné zóny: v standalone režime siaha obsah pod výrez aj pod
+   domovskú čiaru. Bez horného odsadenia sa hlavička prekrýva so
+   systémovým časom. */
+.safe-top {
+  padding-top: env(safe-area-inset-top);
+}
+.safe-bottom {
   padding-bottom: env(safe-area-inset-bottom);
 }
 
-.card {
-  @apply rounded-xl border border-line bg-surface p-4;
+/* Čísla majú pevnú šírku číslic, aby stĺpce neposkakovali pri zmene
+   hodnoty. Popisky ostávajú v bežnom písme — monospace na nich robil
+   z aplikácie výpis z databázy. */
+@utility num {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-variant-numeric: tabular-nums;
 }
 
-.card-title {
-  @apply text-xs font-medium uppercase tracking-wide text-faint;
+/* Sekcia namiesto karty: nadpis + vlasová linka. Osem orámovaných
+   kariet pod sebou nemalo hierarchiu — všetko kričalo rovnako. */
+.section {
+  @apply py-4;
+}
+.section + .section {
+  @apply border-t border-hair;
+}
+.section-head {
+  @apply mb-2 flex items-center gap-2 text-sm font-medium;
 }
 
-/* @utility (nie .btn) — Tailwind v4 dovolí @apply len na registrovanú
-   utilitu, obyčajná trieda by v .btn-primary spadla na "unknown utility". */
+.tile {
+  @apply rounded-lg bg-surface px-2.5 py-2;
+}
+.tile-label {
+  @apply text-xs text-muted;
+}
+.tile-value {
+  @apply num mt-0.5 text-[15px];
+}
+
 @utility btn {
   @apply inline-flex items-center justify-center gap-2 rounded-lg px-3 py-2
          text-sm font-medium transition-colors disabled:cursor-not-allowed
@@ -85,17 +116,18 @@ nav.bottom-nav {
 .btn-primary {
   @apply btn bg-emerald-600 text-white hover:bg-emerald-500;
 }
-
 .btn-warn {
   @apply btn bg-amber-600 text-white hover:bg-amber-500;
 }
-
 .btn-danger {
   @apply btn bg-rose-600 text-white hover:bg-rose-500;
 }
-
 .btn-ghost {
-  @apply btn border border-line text-muted hover:bg-line/40;
+  @apply btn border border-line text-muted hover:bg-surface;
+}
+.btn-quiet {
+  @apply btn rounded-md border border-line px-2 py-1 text-xs text-muted
+         hover:bg-surface;
 }
 
 .input {
@@ -103,21 +135,21 @@ nav.bottom-nav {
          text-ink outline-none focus:border-emerald-600;
 }
 
-/* Tabuľky sa na mobile scrollujú vodorovne vo vlastnom kontajneri,
-   aby sa nikdy nescrollovala celá stránka. */
-.table-wrap {
-  @apply -mx-4 overflow-x-auto px-4 sm:mx-0 sm:px-0;
+/* Riadok zoznamu — nahrádza tabuľky. Na mobile sa nikdy neposúva do
+   bokov, prebytočné údaje idú do rozkliku. */
+.row {
+  @apply flex w-full items-center gap-2 border-b border-hair py-2 text-sm;
+}
+.row:last-child {
+  @apply border-b-0;
 }
 
-table.data {
-  @apply w-full min-w-[640px] border-collapse text-sm;
+@utility chip {
+  @apply rounded px-1.5 py-px text-[10px] font-medium;
 }
-
-table.data th {
-  @apply whitespace-nowrap border-b border-line px-2 py-2 text-left text-xs
-         font-medium uppercase tracking-wide text-faint;
+.chip-long {
+  @apply chip bg-longbg text-long;
 }
-
-table.data td {
-  @apply whitespace-nowrap border-b border-line/50 px-2 py-2;
+.chip-short {
+  @apply chip bg-shortbg text-short;
 }

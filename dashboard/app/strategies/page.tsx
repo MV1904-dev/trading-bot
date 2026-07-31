@@ -7,6 +7,7 @@ import CostSplit, {
 } from "@/components/CostSplit";
 import { useLive } from "@/lib/useLive";
 import { money, pnlClass, signed } from "@/lib/format";
+import { Empty, Section } from "@/components/ui";
 import type { BotState, DailyCycle, Position, Trade } from "@/lib/types";
 
 type Row = {
@@ -67,17 +68,14 @@ export default function StrategiesPage() {
 
   if (rows.length === 0) {
     return (
-      <main className="space-y-3">
-        <h1 className="px-1 text-lg font-semibold">Výkon per stratégia</h1>
-        <p className="card text-sm text-muted">Zatiaľ žiadne dáta.</p>
+      <main>
+        <Empty>Zatiaľ žiadne dáta.</Empty>
       </main>
     );
   }
 
   return (
-    <main className="space-y-3">
-      <h1 className="px-1 text-lg font-semibold">Výkon per stratégia</h1>
-
+    <main>
       {rows.map((r) => {
         const flag = flags.find((f) => f.startsWith(r.strategy));
         const on = flag?.includes(": ON");
@@ -91,49 +89,39 @@ export default function StrategiesPage() {
         const spreadKnown = r.long.spreadKnown + r.short.spreadKnown;
 
         return (
-          <div key={r.strategy} className="card space-y-4">
-            <div className="flex flex-wrap items-center gap-2">
-              <h2 className="font-semibold">{r.strategy}</h2>
-              {flag && (
-                <span
-                  className={`rounded-full px-2 py-0.5 text-xs ${
-                    on
-                      ? "bg-emerald-600/15 text-pos"
-                      : "bg-line text-muted"
-                  }`}
-                >
-                  {on ? "ON" : "OFF"}
-                </span>
-              )}
-              {r.open > 0 && (
-                <span className="text-xs text-faint">{r.open} otvorených</span>
-              )}
-              <span className={`ml-auto font-mono text-lg ${pnlClass(r.pnl)}`}>
-                {signed(r.pnl)}
-              </span>
-            </div>
+          <Section key={r.strategy} title={r.strategy} meta={r.open > 0 ? `${r.open} otvorených` : undefined}>
+        <div className="mb-3 flex items-center gap-2">
+          {flag && (
+            <span className={`chip ${on ? "bg-longbg text-long" : "bg-surface text-muted"}`}>
+              {on ? "ON" : "OFF"}
+            </span>
+          )}
+          <span className={`num ml-auto text-lg ${pnlClass(r.pnl)}`}>
+            {signed(r.pnl)}
+          </span>
+        </div>
 
-            <div className="grid grid-cols-3 gap-3 text-sm">
-              <div>
-                <div className="card-title">Cykly</div>
-                <div className="mt-0.5 font-mono">{r.cycles}</div>
+            <div className="grid grid-cols-3 gap-2">
+              <div className="tile">
+                <div className="tile-label">Cykly</div>
+                <div className="tile-value">{r.cycles}</div>
               </div>
-              <div>
-                <div className="card-title">Win rate</div>
-                <div className="mt-0.5 font-mono">
+              <div className="tile">
+                <div className="tile-label">Win rate</div>
+                <div className="tile-value">
                   {r.cycles ? `${winRate.toFixed(0)} %` : "—"}
                 </div>
               </div>
-              <div>
-                <div className="card-title">Náklady / hrubý</div>
-                <div className="mt-0.5 font-mono">
+              <div className="tile">
+                <div className="tile-label">Náklady / hrubý</div>
+                <div className="tile-value">
                   {costRatio == null ? "—" : `${costRatio.toFixed(1)} %`}
                 </div>
               </div>
             </div>
 
-            <div>
-              <div className="card-title mb-2">Rozpad nákladov spolu</div>
+            <div className="mt-3">
+              <div className="tile-label mb-2">Rozpad nákladov</div>
               <CostBar
                 commission={commission}
                 spread={spread}
@@ -148,8 +136,10 @@ export default function StrategiesPage() {
               )}
             </div>
 
-            <CostSplit long={r.long} short={r.short} />
-          </div>
+            <div className="mt-4">
+              <CostSplit long={r.long} short={r.short} />
+            </div>
+          </Section>
         );
       })}
     </main>

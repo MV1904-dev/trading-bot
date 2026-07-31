@@ -49,74 +49,49 @@ export default function CostSplit({
   long: SideCosts;
   short: SideCosts;
 }) {
-  const rows: [string, (s: SideCosts) => string, (s: SideCosts) => string][] = [
-    ["Obchodov", (s) => String(s.trades), () => "text-ink"],
-    ["Provízie", (s) => `−${money(s.commission)}`, () => "text-muted"],
-    ["Spread", (s) => `−${money(s.spread)}`, () => "text-muted"],
-    [
-      "Funding",
-      (s) => signed(s.funding),
-      (s) => (s.funding < 0 ? "text-neg" : s.funding > 0 ? "text-pos" : "text-faint"),
-    ],
-    [
-      "Náklady spolu",
-      (s) => `−${money(s.commission + s.spread - Math.min(s.funding, 0))}`,
-      () => "text-ink font-medium",
-    ],
-  ];
-
   const totalFunding = long.funding + short.funding;
   const longShare =
     totalFunding === 0 ? null : (long.funding / totalFunding) * 100;
 
+  const rows: [string, (s: SideCosts) => string, (s: SideCosts) => string][] = [
+    ["Obchodov", (s) => String(s.trades), () => ""],
+    ["Provízie", (s) => `−${money(s.commission)}`, () => "text-muted"],
+    ["Spread", (s) => `−${money(s.spread)}`, () => "text-muted"],
+    ["Funding", (s) => signed(s.funding),
+      (s) => (s.funding < 0 ? "text-neg" : s.funding > 0 ? "text-pos" : "text-faint")],
+    ["Spolu", (s) => `−${money(s.commission + s.spread - Math.min(s.funding, 0))}`,
+      () => "font-medium"],
+  ];
+
   return (
     <div>
-      <div className="card-title mb-2">Náklady: long vs short</div>
-
-      <div className="table-wrap">
-        <table className="data !min-w-[360px]">
-          <thead>
-            <tr>
-              <th />
-              <th className="text-right">
-                <span className="text-long">LONG</span>
-              </th>
-              <th className="text-right">
-                <span className="text-short">SHORT</span>
-              </th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map(([label, val, cls]) => (
-              <tr key={label}>
-                <td className="text-muted">{label}</td>
-                <td className={`text-right font-mono ${cls(long)}`}>
-                  {long.trades === 0 ? "—" : val(long)}
-                </td>
-                <td className={`text-right font-mono ${cls(short)}`}>
-                  {short.trades === 0 ? "—" : val(short)}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+      <div className="mb-1 flex text-xs text-faint">
+        <span className="flex-1">Náklady</span>
+        <span className="w-20 text-right text-long">Long</span>
+        <span className="w-20 text-right text-short">Short</span>
       </div>
+      {rows.map(([label, val, cls]) => (
+        <div key={label} className="row !py-1.5 text-xs">
+          <span className="flex-1 text-muted">{label}</span>
+          <span className={`num w-20 text-right ${cls(long)}`}>
+            {long.trades === 0 ? "—" : val(long)}
+          </span>
+          <span className={`num w-20 text-right ${cls(short)}`}>
+            {short.trades === 0 ? "—" : val(short)}
+          </span>
+        </div>
+      ))}
 
       <FundingBar long={long.funding} short={short.funding} />
 
-      <p className="mt-2 text-xs text-faint">
-        {longShare == null ? (
-          "Funding zatiaľ nebol účtovaný ani na jednej strane."
-        ) : (
-          <>
-            Longy nesú <strong>{Math.abs(longShare).toFixed(0)} %</strong>{" "}
-            celkového funding nákladu. Swap sa účtuje len pozíciám otvoreným
-            cez denný rollover — dotklo sa to{" "}
-            {long.fundingCharged + short.fundingCharged} z{" "}
-            {long.trades + short.trades} obchodov.
-          </>
-        )}
-      </p>
+      {longShare != null && (
+        <p className="mt-2 text-xs text-faint">
+          Longy nesú {Math.abs(longShare).toFixed(0)} % funding nákladu. Swap sa
+          účtuje len pozíciám cez denný rollover — dotklo sa to{" "}
+          {long.fundingCharged + short.fundingCharged} z{" "}
+          {long.trades + short.trades} obchodov.
+        </p>
+      )}
     </div>
   );
 }
@@ -130,7 +105,7 @@ function FundingBar({ long, short }: { long: number; short: number }) {
 
   return (
     <div className="mt-3">
-      <div className="flex h-2 overflow-hidden rounded-full bg-line">
+      <div className="flex h-2 overflow-hidden rounded-full bg-surface">
         <div className="bg-long" style={{ width: `${(l / total) * 100}%` }} />
         <div className="bg-short" style={{ width: `${(s / total) * 100}%` }} />
       </div>

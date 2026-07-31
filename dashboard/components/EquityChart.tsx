@@ -16,8 +16,7 @@ import type { EquityPoint } from "@/lib/types";
 export default function EquityChart({ points }: { points: EquityPoint[] }) {
   if (points.length === 0) {
     return (
-      <div className="card">
-        <span className="card-title">Equity</span>
+      <div>
         <p className="mt-3 text-sm text-muted">
           Zatiaľ žiadne snapshoty — bot ich zapisuje každých 5 minút.
         </p>
@@ -32,8 +31,7 @@ export default function EquityChart({ points }: { points: EquityPoint[] }) {
   }));
 
   return (
-    <div className="card">
-      <span className="card-title">Equity — realizovaná vs. s floatingom</span>
+    <div>
       <div className="mt-3 h-56 w-full">
         <ResponsiveContainer width="100%" height="100%">
           <AreaChart data={data} margin={{ top: 4, right: 4, bottom: 0, left: 0 }}>
