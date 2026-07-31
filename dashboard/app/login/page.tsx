@@ -26,8 +26,8 @@ export default function LoginPage() {
   }
 
   return (
-    <main className="flex min-h-dvh items-center justify-center">
-      <div className="card w-full max-w-sm">
+    <main className="flex min-h-dvh items-center justify-center px-4">
+      <div className="w-full max-w-sm rounded-xl border border-line bg-solid p-5">
         <h1 className="text-lg font-semibold">Trading bot</h1>
         <p className="mt-1 text-sm text-muted">
           Prihlásenie odkazom na e-mail.
