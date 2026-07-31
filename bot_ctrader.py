@@ -1007,6 +1007,20 @@ class CTraderBot:
             "strategies": [s.status_line() for s in self.strategies],
         }
 
+    def _sb_patch_pause_state(self) -> None:
+        """Premietne pauzu do cache snapshotu hneď.
+
+        Snapshot stavia obchodné vlákno raz za tick, takže bez tohto by
+        push spustený tlačidlom odoslal ešte stav spred pauzy a dashboard
+        by až do ďalšieho ticku tvrdil, že sa nič nestalo.
+        """
+        with self._sync_lock:
+            state = self._sync_snap.get("state")
+            if state:
+                state["paused"] = self.paused_until > time.time()
+                state["paused_until"] = (_iso_utc(self.paused_until)
+                                         if self.paused_until else None)
+
     def _sb_pause(self, action: str, cmd: dict) -> None:
         """Beží v poller vlákne — mení jediný float, rovnako ako /pauza."""
         if action == "pause":
@@ -1019,6 +1033,7 @@ class CTraderBot:
             self.paused_until = 0.0
             self.tg.send("▶️ Vstupy povolené (z dashboardu).")
             self.sync.finish(cmd["id"], True, "vstupy povolené")
+        self._sb_patch_pause_state()
         self.sync.trigger()
 
     def _drain_sb_commands(self) -> None:
