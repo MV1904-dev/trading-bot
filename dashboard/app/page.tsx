@@ -1,13 +1,17 @@
 "use client";
 
+import Alerts from "@/components/Alerts";
 import BotStatus from "@/components/BotStatus";
 import DailyPnlTable from "@/components/DailyPnlTable";
 import EquityChart from "@/components/EquityChart";
 import Metrics from "@/components/Metrics";
 import PnlCalendar from "@/components/PnlCalendar";
 import PriceBands from "@/components/PriceBands";
+import Roi from "@/components/Roi";
 import { useLive } from "@/lib/useLive";
-import type { BotState, DailyCycle, EquityPoint, Position } from "@/lib/types";
+import type {
+  BotState, DailyCycle, EquityPoint, Position, Trade,
+} from "@/lib/types";
 
 export default function Overview() {
   const { rows: states } = useLive<BotState>("bot_state", (q) =>
@@ -22,6 +26,9 @@ export default function Overview() {
   const { rows: daily } = useLive<DailyCycle>("daily_cycles", (q) =>
     q.select("*").order("day", { ascending: false }).limit(400),
   );
+  const { rows: firstTrades } = useLive<Trade>("trades", (q) =>
+    q.select("closed_at").order("closed_at", { ascending: true }).limit(1),
+  );
 
   const state = states[0] ?? null;
 
@@ -31,6 +38,8 @@ export default function Overview() {
       <BotStatus state={state} />
       <PriceBands state={state} />
       <Metrics state={state} positions={positions} daily={daily} />
+      <Roi state={state} firstTradeAt={firstTrades[0]?.closed_at ?? null} />
+      <Alerts state={state} positions={positions} />
       <EquityChart points={equity} />
       <PnlCalendar daily={daily} />
       <DailyPnlTable daily={daily} />

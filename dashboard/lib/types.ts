@@ -14,6 +14,14 @@ export type BotState = {
   equity: number | null;
   floating_pnl: number | null;
   config: Record<string, unknown> | null;
+  deposits_net: number | null;
+  deposits_count: number | null;
+  used_margin: number | null;
+  free_margin: number | null;
+  margin_level: number | null;
+  swap_long: number | null;
+  swap_short: number | null;
+  swap_rollover_3days: number | null;
   heartbeat_at: string;
   updated_at: string;
 };
@@ -81,4 +89,11 @@ export type Command = {
   result: string | null;
   created_at: string;
   executed_at: string | null;
+};
+
+export type CalendarEvent = {
+  ts: string;
+  currency: string;
+  title: string;
+  impact: string;
 };

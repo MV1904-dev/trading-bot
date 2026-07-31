@@ -9,6 +9,7 @@ const LINKS = [
   { href: "/strategies", label: "Stratégie" },
   { href: "/positions", label: "Pozície" },
   { href: "/history", label: "História" },
+  { href: "/calendar", label: "Kalendár" },
 ];
 
 export default function Nav() {
