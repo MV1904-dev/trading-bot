@@ -892,7 +892,8 @@ class CTraderBot:
                     "commission_usd": r["commission_usd"],
                     "pnl_float": pnl,
                     "spread_at_entry": spread,
-                    "spread_cost_usd": (spread * r["qty"]) if spread else None,
+                    "spread_cost_usd": (spread * r["qty"])
+                                       if spread is not None else None,
                     "context": ctx,
                     "updated_at": _iso_utc(time.time()),
                 })
@@ -928,7 +929,8 @@ class CTraderBot:
                     "commission_usd": comm,
                     "funding_usd": fund,
                     "spread_at_entry": spread,
-                    "spread_cost_usd": (spread * r["qty"]) if spread else None,
+                    "spread_cost_usd": (spread * r["qty"])
+                                       if spread is not None else None,
                     "manual_close": bool(r["manual_close"]),
                     "context": ctx,
                 })
