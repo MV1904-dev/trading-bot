@@ -31,10 +31,10 @@ from typing import Optional
 
 from ctrader_open_api import Client, EndPoints, Protobuf, TcpProtocol
 from ctrader_open_api.messages.OpenApiMessages_pb2 import (
-    ProtoOAAccountAuthReq, ProtoOAApplicationAuthReq, ProtoOADealListReq,
-    ProtoOAGetAccountListByAccessTokenReq, ProtoOAGetTrendbarsReq,
-    ProtoOANewOrderReq, ProtoOAReconcileReq, ProtoOASubscribeSpotsReq,
-    ProtoOASymbolsListReq, ProtoOATraderReq)
+    ProtoOAAccountAuthReq, ProtoOAApplicationAuthReq, ProtoOAClosePositionReq,
+    ProtoOADealListReq, ProtoOAGetAccountListByAccessTokenReq,
+    ProtoOAGetTrendbarsReq, ProtoOANewOrderReq, ProtoOAReconcileReq,
+    ProtoOASubscribeSpotsReq, ProtoOASymbolsListReq, ProtoOATraderReq)
 from ctrader_open_api.messages.OpenApiModelMessages_pb2 import (
     ProtoOAOrderType, ProtoOATradeSide, ProtoOATrendbarPeriod)
 
@@ -443,6 +443,34 @@ class CTraderBroker:
 
     def open_position_ids(self) -> set:
         return {p["position_id"] for p in self.positions()}
+
+    def close_position(self, position_id: int,
+                       units: float = 0.0) -> dict:
+        """Zatvorí pozíciu trhovým príkazom. units=0 → celý objem.
+
+        cTrader chce objem v rovnakej škále ako pri otváraní. Objem si
+        radšej dotiahneme z reconcile, než by sme verili volajúcemu —
+        nesprávny objem by nechal visieť zvyšok pozície.
+        """
+        pos = next((p for p in self.positions()
+                    if p["position_id"] == int(position_id)), None)
+        if pos is None:
+            raise CTraderError(f"Pozícia {position_id} nie je otvorená.")
+        vol = abs(units) if units else pos["units"]
+        req = ProtoOAClosePositionReq()
+        req.ctidTraderAccountId = self.account_id
+        req.positionId = int(position_id)
+        req.volume = int(round(vol * VOLUME_SCALE))
+        self._send(req)
+        # Potvrdenie berieme z reconcile, nie z odpovede — broker odpovedá
+        # prijatím príkazu, nie vykonaním.
+        deadline = time.time() + 20
+        while time.time() < deadline:
+            time.sleep(0.5)
+            if int(position_id) not in self.open_position_ids():
+                return {"position_id": int(position_id), "closed": True}
+        raise CTraderError(
+            f"Pozícia {position_id}: potvrdenie zatvorenia neprišlo do 20 s.")
 
     def closed_deals_since(self, ts_ms: int) -> dict:
         """{positionId: {'close_price','gross','swap','commission'}} pre

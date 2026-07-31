@@ -85,6 +85,21 @@ class BotDB:
         self.conn.row_factory = sqlite3.Row
         self.conn.execute("PRAGMA journal_mode=WAL")
         self.conn.executescript(SCHEMA)
+        self._migrate()
+        self.conn.commit()
+
+    def _migrate(self) -> None:
+        """CREATE TABLE IF NOT EXISTS nedoplní stĺpce do existujúcej DB,
+        takže nové stĺpce pridávame ručne a idempotentne."""
+        have = {r["name"] for r in self.conn.execute(
+            "PRAGMA table_info(trades)")}
+        if "manual_close" not in have:
+            self.conn.execute("ALTER TABLE trades ADD COLUMN "
+                              "manual_close INTEGER NOT NULL DEFAULT 0")
+
+    def mark_manual_close(self, trade_id: int) -> None:
+        self.conn.execute("UPDATE trades SET manual_close=1 WHERE id=?",
+                          (trade_id,))
         self.conn.commit()
 
     # --- signals ----------------------------------------------------------

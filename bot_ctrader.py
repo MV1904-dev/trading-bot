@@ -47,10 +47,18 @@ from trading.strategy_base import Bar, Signal
 from trading.strategy_grid25 import Grid25, Grid25Config
 from trading.strategy_s7 import S7Config, S7Continuation
 from trading.shadow_judge import ShadowJudge
+from trading.sync_supabase import SupabaseSync
 from trading.tg import Telegram
 
 ROOT = Path(__file__).resolve().parent
 log = logging.getLogger("bot_ctrader")
+
+
+def _iso_utc(ts: float | None) -> str | None:
+    """Unix čas → ISO 8601 v UTC pre Supabase (timestamptz)."""
+    if not ts:
+        return None
+    return datetime.fromtimestamp(ts, timezone.utc).isoformat()
 
 
 @dataclass
@@ -161,6 +169,17 @@ class CTraderBot:
         self._stop = threading.Event()
         self._cmd_queue: queue.Queue = queue.Queue()
         self._saved_offset = self.tg.offset
+        # Supabase zrkadlo pre dashboard. SQLite spojenie je viazané na
+        # vlákno, ktoré ho vytvorilo, takže snapshot staviame TU (obchodné
+        # vlákno) a push vlákno už len posiela hotový dict.
+        self.sync = SupabaseSync()
+        self._sync_snap: dict = {}
+        self._sync_lock = threading.Lock()
+        self._sb_queue: queue.Queue = queue.Queue()
+        # Balance je sieťové volanie na brokera — snapshot beží každý tick
+        # (10 s), takže hodnotu cacheujeme a obnovujeme raz za 5 minút.
+        self._last_balance: float = 0.0
+        self._balance_ts: float = 0.0
 
     # ------------------------------------------------------------------ #
     def _guard_demo(self) -> None:
@@ -191,6 +210,12 @@ class CTraderBot:
                      + self._config_line())
         self.db.log_event("info", "ctrader bot štart")
         self._start_command_thread()
+        self._last_balance = acct["balance"]
+        self._balance_ts = time.time()
+        self._refresh_sync_snapshot(acct["balance"])
+        self.sync.start(snapshot=self._sync_snapshot,
+                        on_command=self._sb_queue.put,
+                        on_pause=self._sb_pause)
 
         deadline = time.time() + run_minutes * 60 if run_minutes else None
         try:
@@ -209,6 +234,7 @@ class CTraderBot:
             self.tg.send("🛑 cTrader bot zastavený (Ctrl-C).")
         finally:
             self._stop.set()
+            self.sync.stop()
             if self.commands_enabled:
                 self.db.meta_set("tg_offset", self.tg.offset)
             self.broker.disconnect()
@@ -337,6 +363,8 @@ class CTraderBot:
         self._daily_snapshot()
         self.macro.refresh()
         self._drain_commands()
+        self._drain_sb_commands()
+        self._refresh_sync_snapshot()
 
     def _price(self) -> dict | None:
         q = self.broker.quote()
@@ -568,10 +596,18 @@ class CTraderBot:
         ctx = dict(sig.context)
         ctx.update({"reason": sig.reason, "failsafe": self.failsafe,
                     "sl_price": sig.sl_price, "max_hold_s": sig.max_hold_s})
+        # Spread pri vstupe je jediný nákladový komponent, ktorý sa nikde
+        # neúčtuje samostatne (je zapečený v cene) — bez neho sa v dashboarde
+        # nedá rozpísať náklad na províziu/spread/funding.
+        q_entry = self.broker.quote()
+        if q_entry:
+            ctx["spread_at_entry"] = round(q_entry["spread"], 6)
         trade_id = self.db.open_trade(
             sig.strategy_id, sig.side, sig.qty, res["price"], sig.tp_price,
             res["position_id"], res["order_id"], 0.0, ctx)
         self.judge.link(jid, trade_id)
+        self._refresh_sync_snapshot()
+        self.sync.trigger()
         for s in self.strategies:
             if s.id == sig.strategy_id:
                 s.on_trade_opened(trade_id, sig.side, res["price"])
@@ -699,7 +735,9 @@ class CTraderBot:
             log.info("Časový stop: zatváram #%d (%s, %.1f h).",
                      row["id"], row["strategy"], (now - row["ts_open"]) / 3600)
             try:
-                self.broker.close_trade(str(row["entry_order_id"]))
+                # Bola tu neexistujúca broker.close_trade() — časový stop by
+                # spadol, keby ho niekedy stratégia zapla (max_hold_s > 0).
+                self.broker.close_position(row["entry_order_id"])
                 self.tg.send(f"⏱ <b>{row['strategy']}</b> časový stop "
                              f"({mh / 3600:.0f} h) — zatváram #{row['id']}.")
             except CTraderError as exc:
@@ -741,6 +779,8 @@ class CTraderBot:
                                               row["entry_price"], close_price))
         log.info("ZAVRETÉ db #%d %s @ %.5f, P/L %+.2f%s",
                  db_id, row["side"], close_price, pnl, note)
+        self._refresh_sync_snapshot()
+        self.sync.trigger()
 
     def _daily_snapshot(self) -> None:
         day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
@@ -804,6 +844,211 @@ class CTraderBot:
             # zhodilo sendMessage na chybe 400 a bot by mlčal znova.
             self.tg.send(f"❓ Neznámy príkaz <code>{html.escape(cmd)}</code>.\n\n"
                          + self._commands_help())
+
+    # --- Supabase zrkadlo a príkazy z dashboardu -------------------------
+    def _balance_cached(self, max_age_s: float = 300.0) -> float:
+        if time.time() - self._balance_ts > max_age_s:
+            try:
+                self._last_balance = self.broker.account_summary()["balance"]
+                self._balance_ts = time.time()
+            except CTraderError as exc:
+                log.debug("Balance sa nepodarilo obnoviť: %s", exc)
+        return self._last_balance
+
+    def _sync_snapshot(self) -> dict:
+        """Beží v push vlákne — vracia len to, čo pripravilo obchodné."""
+        with self._sync_lock:
+            return dict(self._sync_snap)
+
+    def _refresh_sync_snapshot(self, balance: float | None = None) -> None:
+        """Beží v obchodnom vlákne (SQLite spojenie je viazané naň)."""
+        if not self.sync.enabled:
+            return
+        try:
+            q = self.broker.quote()
+            mid = q["mid"] if q else None
+            rows = self.db.open_trades()
+            positions, floating = [], 0.0
+            for r in rows:
+                ctx = json.loads(r["context"] or "{}")
+                spread = ctx.get("spread_at_entry")
+                pnl = None
+                if mid is not None:
+                    pnl = (mid - r["entry_price"]) * r["qty"] \
+                        if r["side"] == "long" \
+                        else (r["entry_price"] - mid) * r["qty"]
+                    floating += pnl
+                positions.append({
+                    "id": r["id"],
+                    "broker_position_id": r["entry_order_id"],
+                    "strategy": r["strategy"],
+                    "symbol": self.cfg.SYMBOL,
+                    "side": r["side"],
+                    "qty": r["qty"],
+                    "entry_price": r["entry_price"],
+                    "tp_price": r["tp_price"],
+                    "opened_at": _iso_utc(r["ts_open"]),
+                    "funding_usd": r["funding_usd"],
+                    "commission_usd": r["commission_usd"],
+                    "pnl_float": pnl,
+                    "spread_at_entry": spread,
+                    "spread_cost_usd": (spread * r["qty"]) if spread else None,
+                    "context": ctx,
+                    "updated_at": _iso_utc(time.time()),
+                })
+
+            # Zavreté obchody posielame prírastkovo — celá história každú
+            # minútu je zbytočná záťaž, ale prekryv 1 h je poistka proti
+            # obchodu, ktorý sa dopísal tesne po poslednom pushi.
+            since = float(self.db.meta_get("sb_trades_until", "0") or 0)
+            closed = self.db.conn.execute(
+                "SELECT * FROM trades WHERE status='closed' AND ts_close >= ? "
+                "ORDER BY ts_close", (max(since - 3600, 0),)).fetchall()
+            trades, newest = [], since
+            for r in closed:
+                ctx = json.loads(r["context"] or "{}")
+                spread = ctx.get("spread_at_entry")
+                gross = r["pnl_usd"] or 0.0
+                comm = r["commission_usd"] or 0.0
+                fund = r["funding_usd"] or 0.0
+                trades.append({
+                    "id": r["id"],
+                    "broker_position_id": r["entry_order_id"],
+                    "strategy": r["strategy"],
+                    "symbol": self.cfg.SYMBOL,
+                    "side": r["side"],
+                    "qty": r["qty"],
+                    "entry_price": r["entry_price"],
+                    "tp_price": r["tp_price"],
+                    "close_price": r["close_price"],
+                    "opened_at": _iso_utc(r["ts_open"]),
+                    "closed_at": _iso_utc(r["ts_close"]),
+                    "gross_pnl_usd": gross,
+                    "pnl_usd": gross - comm + fund,
+                    "commission_usd": comm,
+                    "funding_usd": fund,
+                    "spread_at_entry": spread,
+                    "spread_cost_usd": (spread * r["qty"]) if spread else None,
+                    "manual_close": bool(r["manual_close"]),
+                    "context": ctx,
+                })
+                newest = max(newest, r["ts_close"] or 0)
+            if newest > since:
+                self.db.meta_set("sb_trades_until", newest)
+
+            daily = [{
+                "day": d["day"], "strategy": d["strategy"],
+                "cycles": d["cycles"], "pnl_usd": d["pnl"],
+                "commission_usd": d["comm"], "funding_usd": d["fund"],
+                "wins": d["wins"], "losses": d["losses"],
+            } for d in self.db.conn.execute(
+                "SELECT date(ts_close,'unixepoch') day, strategy, "
+                "COUNT(*) cycles, SUM(pnl_usd-commission_usd+funding_usd) pnl, "
+                "SUM(commission_usd) comm, SUM(funding_usd) fund, "
+                "SUM(CASE WHEN pnl_usd-commission_usd+funding_usd > 0 "
+                "THEN 1 ELSE 0 END) wins, "
+                "SUM(CASE WHEN pnl_usd-commission_usd+funding_usd <= 0 "
+                "THEN 1 ELSE 0 END) losses "
+                "FROM trades WHERE status='closed' AND ts_close IS NOT NULL "
+                "GROUP BY day, strategy ORDER BY day DESC LIMIT 120")]
+
+            bal = balance if balance is not None else self._balance_cached()
+            reason = self._blocked_reason()
+            snap = {
+                "state": {
+                    "running": True,
+                    "paused": self.paused_until > time.time(),
+                    "paused_until": _iso_utc(self.paused_until)
+                                    if self.paused_until else None,
+                    "blocked_reason": reason or None,
+                    "failsafe": self.failsafe,
+                    "broker_connected": self.broker.is_connected(),
+                    "symbol": self.cfg.SYMBOL,
+                    "last_price": mid,
+                    "band_low": self.strategy.cfg.band_low,
+                    "band_high": self.strategy.cfg.band_high,
+                    "balance": bal,
+                    "equity": (bal + floating) if bal else None,
+                    "floating_pnl": floating,
+                    "config": self._config_dict(),
+                },
+                "positions": positions,
+                "trades": trades,
+                "daily": daily,
+                "account": {
+                    "balance": bal or 0.0,
+                    "equity": (bal or 0.0) + floating,
+                    "floating_pnl": floating,
+                    "open_positions": len(positions),
+                },
+            }
+            with self._sync_lock:
+                self._sync_snap = snap
+        except Exception:  # noqa: BLE001 — zrkadlo nesmie zhodiť obchodovanie
+            log.exception("Príprava Supabase snapshotu zlyhala")
+
+    def _config_dict(self) -> dict:
+        c = self.cfg
+        return {
+            "symbol": c.SYMBOL, "qty": c.QTY,
+            "step_short": c.STEP_SHORT, "step_long": c.STEP_LONG,
+            "tp_pct": self.strategy.cfg.tp_pct,
+            "band_low": self.strategy.cfg.band_low,
+            "band_high": self.strategy.cfg.band_high,
+            "capacity": f"{c.CAP_BASE}+{c.CAP_RESERVE}",
+            "tick_seconds": c.TICK_SECONDS,
+            "failsafe_band": c.FAILSAFE_BAND, "s7_enabled": c.S7_ENABLED,
+            "strategies": [s.status_line() for s in self.strategies],
+        }
+
+    def _sb_pause(self, action: str, cmd: dict) -> None:
+        """Beží v poller vlákne — mení jediný float, rovnako ako /pauza."""
+        if action == "pause":
+            mins = float((cmd.get("params") or {}).get("minutes", 60))
+            self.paused_until = time.time() + mins * 60
+            self.tg.send(f"⏸ Vstupy pozastavené na {mins:.0f} min "
+                         f"(z dashboardu).")
+            self.sync.finish(cmd["id"], True, f"pauza {mins:.0f} min")
+        else:
+            self.paused_until = 0.0
+            self.tg.send("▶️ Vstupy povolené (z dashboardu).")
+            self.sync.finish(cmd["id"], True, "vstupy povolené")
+        self.sync.trigger()
+
+    def _drain_sb_commands(self) -> None:
+        """Beží v obchodnom vlákne — sem chodí len 'close', lebo siaha na
+        brokera aj DB."""
+        while True:
+            try:
+                cmd = self._sb_queue.get_nowait()
+            except queue.Empty:
+                break
+            try:
+                self._sb_close(cmd)
+            except Exception as exc:  # noqa: BLE001
+                log.exception("Supabase príkaz %s zlyhal", cmd.get("id"))
+                self.sync.finish(cmd["id"], False, str(exc))
+
+    def _sb_close(self, cmd: dict) -> None:
+        db_id = int(cmd["position_id"])
+        row = self.db.conn.execute(
+            "SELECT * FROM trades WHERE id=? AND status='open'",
+            (db_id,)).fetchone()
+        if row is None:
+            self.sync.finish(cmd["id"], False,
+                             f"#{db_id} nie je otvorená pozícia")
+            return
+        # Flag ide do DB PRED zatvorením: keby sa proces medzi príkazom
+        # a reconcile reštartoval, obchod sa dopočíta ako ručný, nie ako TP.
+        self.db.mark_manual_close(db_id)
+        self.broker.close_position(row["entry_order_id"])
+        self.tg.send(f"🖐 <b>{row['strategy']}</b> #{db_id} "
+                     f"{row['side'].upper()} zatvorené ručne z dashboardu.")
+        self.sync.finish(cmd["id"], True, f"#{db_id} zatvorené")
+        # _poll_closes dopočíta reálnu cenu a P/L z dealu.
+        self._poll_closes()
+        self._refresh_sync_snapshot()
+        self.sync.trigger()
 
     @staticmethod
     def _commands_help() -> str:
