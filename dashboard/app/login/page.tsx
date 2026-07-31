@@ -29,12 +29,12 @@ export default function LoginPage() {
     <main className="flex min-h-dvh items-center justify-center">
       <div className="card w-full max-w-sm">
         <h1 className="text-lg font-semibold">Trading bot</h1>
-        <p className="mt-1 text-sm text-zinc-400">
+        <p className="mt-1 text-sm text-muted">
           Prihlásenie odkazom na e-mail.
         </p>
 
         {sent ? (
-          <p className="mt-6 rounded-lg bg-emerald-950/60 p-3 text-sm text-emerald-300">
+          <p className="mt-6 rounded-lg bg-emerald-600/10 p-3 text-sm text-pos">
             Odkaz je na ceste na <strong>{email}</strong>. Otvor ho na tomto
             zariadení.
           </p>
@@ -54,9 +54,9 @@ export default function LoginPage() {
           </form>
         )}
 
-        {err && <p className="mt-3 text-sm text-rose-400">{err}</p>}
+        {err && <p className="mt-3 text-sm text-neg">{err}</p>}
 
-        <p className="mt-6 text-xs text-zinc-600">
+        <p className="mt-6 text-xs text-faint">
           Prístup k dátam je viazaný na jediný účet priamo v databáze — cudzie
           prihlásenie neuvidí nič ani po úspešnom prihlásení.
         </p>

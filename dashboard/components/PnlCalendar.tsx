@@ -53,7 +53,7 @@ export default function PnlCalendar({ daily }: { daily: DailyCycle[] }) {
       <div className="mt-3 flex gap-1">
         <div className="flex flex-col gap-1 pr-1">
           {DAYS.map((d) => (
-            <div key={d} className="h-5 text-[10px] leading-5 text-zinc-600">
+            <div key={d} className="h-5 text-[10px] leading-5 text-faint">
               {d}
             </div>
           ))}
@@ -69,7 +69,7 @@ export default function PnlCalendar({ daily }: { daily: DailyCycle[] }) {
                   v == null
                     ? "transparent"
                     : v === 0
-                      ? "#27272a"
+                      ? "var(--line)"
                       : v > 0
                         ? `rgba(52,211,153,${0.15 + intensity * 0.75})`
                         : `rgba(244,63,94,${0.15 + intensity * 0.75})`;
@@ -81,7 +81,7 @@ export default function PnlCalendar({ daily }: { daily: DailyCycle[] }) {
                         ? cell.key
                         : `${cell.key}: ${signed(v)} (${cell.cycles} cyklov)`
                     }
-                    className="h-5 w-5 shrink-0 rounded-sm border border-zinc-900"
+                    className="h-5 w-5 shrink-0 rounded-sm border border-line"
                     style={{ background: bg }}
                   />
                 );
@@ -90,7 +90,7 @@ export default function PnlCalendar({ daily }: { daily: DailyCycle[] }) {
           ))}
         </div>
       </div>
-      <p className="mt-3 text-xs text-zinc-600">
+      <p className="mt-3 text-xs text-faint">
         Posledných 8 týždňov. Sýtosť zodpovedá veľkosti P/L, prázdna bunka
         znamená deň bez zavretého obchodu.
       </p>

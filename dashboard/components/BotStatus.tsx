@@ -15,7 +15,7 @@ export default function BotStatus({ state }: { state: BotState | null }) {
   if (!state) {
     return (
       <div className="card">
-        <p className="text-sm text-zinc-400">
+        <p className="text-sm text-muted">
           Zatiaľ neprišiel žiadny stav — bot ešte nič nepushol.
         </p>
       </div>
@@ -26,7 +26,7 @@ export default function BotStatus({ state }: { state: BotState | null }) {
   const paused = state.paused;
 
   const label = stale
-    ? { text: "Bez spojenia", cls: "bg-zinc-700" }
+    ? { text: "Bez spojenia", cls: "bg-line" }
     : !state.broker_connected
       ? { text: "Broker odpojený", cls: "bg-rose-600" }
       : paused
@@ -63,11 +63,11 @@ export default function BotStatus({ state }: { state: BotState | null }) {
           {label.text}
         </span>
         {state.failsafe && (
-          <span className="rounded-full bg-rose-950 px-2.5 py-1 text-xs text-rose-300">
+          <span className="rounded-full bg-rose-600/15 px-2.5 py-1 text-xs text-neg">
             G8 poistka aktívna
           </span>
         )}
-        <span className="text-xs text-zinc-500">
+        <span className="text-xs text-faint">
           heartbeat {dateTime(state.heartbeat_at)}
         </span>
 
@@ -93,22 +93,22 @@ export default function BotStatus({ state }: { state: BotState | null }) {
       </div>
 
       {state.blocked_reason && (
-        <p className="mt-3 text-sm text-amber-300">
+        <p className="mt-3 text-sm text-warn">
           Vstupy blokované: {state.blocked_reason}
         </p>
       )}
       {paused && state.paused_until && (
-        <p className="mt-1 text-sm text-zinc-400">
+        <p className="mt-1 text-sm text-muted">
           Pauza do {dateTime(state.paused_until)}
         </p>
       )}
       {stale && (
-        <p className="mt-3 text-sm text-zinc-400">
+        <p className="mt-3 text-sm text-muted">
           Posledný signál je starší než 3 minúty. Údaje nižšie sú z posledného
           úspešného pushu, nie z aktuálneho stavu.
         </p>
       )}
-      {msg && <p className="mt-3 text-sm text-zinc-300">{msg}</p>}
+      {msg && <p className="mt-3 text-sm text-ink">{msg}</p>}
     </div>
   );
 }

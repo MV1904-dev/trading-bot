@@ -3,7 +3,9 @@
 import { useState } from "react";
 import { createClient } from "@/lib/supabase";
 import { useLive } from "@/lib/useLive";
-import { age, money, pnlClass, price, signed } from "@/lib/format";
+import {
+  age, holdClass, holdMs, money, pnlClass, price, signed,
+} from "@/lib/format";
 import type { Position } from "@/lib/types";
 
 export default function PositionsPage() {
@@ -62,10 +64,10 @@ export default function PositionsPage() {
         </div>
       </div>
 
-      {msg && <p className="card text-sm text-zinc-300">{msg}</p>}
+      {msg && <p className="card text-sm text-ink">{msg}</p>}
 
       {positions.length === 0 ? (
-        <p className="card text-sm text-zinc-400">Žiadne otvorené pozície.</p>
+        <p className="card text-sm text-muted">Žiadne otvorené pozície.</p>
       ) : (
         <div className="card">
           <div className="table-wrap">
@@ -85,26 +87,28 @@ export default function PositionsPage() {
               <tbody>
                 {positions.map((p) => (
                   <tr key={p.id}>
-                    <td className="text-zinc-500">{p.id}</td>
+                    <td className="text-faint">{p.id}</td>
                     <td>{p.strategy}</td>
                     <td>
                       <span
                         className={
                           p.side === "long"
-                            ? "text-emerald-400"
-                            : "text-sky-400"
+                            ? "text-long"
+                            : "text-short"
                         }
                       >
                         {p.side === "long" ? "LONG" : "SHORT"}
                       </span>
-                      <span className="ml-1 text-zinc-500">
+                      <span className="ml-1 text-faint">
                         {money(p.qty, 0)}
                       </span>
                     </td>
                     <td className="font-mono">
                       {price(p.entry_price)} → {price(p.tp_price)}
                     </td>
-                    <td className="text-zinc-400">{age(p.opened_at)}</td>
+                    <td className={holdClass(holdMs(p.opened_at, null))}>
+                      {age(p.opened_at)}
+                    </td>
                     <td
                       className={`text-right font-mono ${pnlClass(p.funding_usd)}`}
                     >
@@ -138,14 +142,14 @@ export default function PositionsPage() {
         >
           <div className="card w-full max-w-sm" onClick={(e) => e.stopPropagation()}>
             <h2 className="font-semibold">Zatvoriť pozíciu #{confirming.id}?</h2>
-            <p className="mt-2 text-sm text-zinc-400">
+            <p className="mt-2 text-sm text-muted">
               {confirming.strategy} · {confirming.side === "long" ? "LONG" : "SHORT"}{" "}
               {money(confirming.qty, 0)} @ {price(confirming.entry_price)}
             </p>
             <p className={`mt-1 font-mono ${pnlClass(confirming.pnl_float)}`}>
               {signed(confirming.pnl_float)}
             </p>
-            <p className="mt-3 text-xs text-zinc-500">
+            <p className="mt-3 text-xs text-faint">
               Zatvorí sa trhovým príkazom, takže výsledná cena sa môže líšiť od
               aktuálnej. Obchod bude v histórii označený ako ručne zatvorený.
             </p>

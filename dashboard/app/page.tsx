@@ -1,6 +1,7 @@
 "use client";
 
 import BotStatus from "@/components/BotStatus";
+import DailyPnlTable from "@/components/DailyPnlTable";
 import EquityChart from "@/components/EquityChart";
 import Metrics from "@/components/Metrics";
 import PnlCalendar from "@/components/PnlCalendar";
@@ -32,6 +33,7 @@ export default function Overview() {
       <Metrics state={state} positions={positions} daily={daily} />
       <EquityChart points={equity} />
       <PnlCalendar daily={daily} />
+      <DailyPnlTable daily={daily} />
     </main>
   );
 }

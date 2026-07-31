@@ -1,5 +1,10 @@
 "use client";
 
+import CostSplit, {
+  addTrade,
+  emptySide,
+  type SideCosts,
+} from "@/components/CostSplit";
 import { useLive } from "@/lib/useLive";
 import { money, pnlClass, signed } from "@/lib/format";
 import type { BotState, DailyCycle, Position, Trade } from "@/lib/types";
@@ -9,12 +14,9 @@ type Row = {
   cycles: number;
   pnl: number;
   wins: number;
-  losses: number;
-  commission: number;
-  funding: number;
-  spread: number;
-  spreadKnown: number;
   open: number;
+  long: SideCosts;
+  short: SideCosts;
 };
 
 export default function StrategiesPage() {
@@ -43,12 +45,9 @@ export default function StrategiesPage() {
         cycles: 0,
         pnl: 0,
         wins: 0,
-        losses: 0,
-        commission: 0,
-        funding: 0,
-        spread: 0,
-        spreadKnown: 0,
         open: 0,
+        long: emptySide(),
+        short: emptySide(),
       });
     return map.get(s)!;
   };
@@ -59,13 +58,7 @@ export default function StrategiesPage() {
     r.cycles += 1;
     r.pnl += pnl;
     if (pnl > 0) r.wins += 1;
-    else r.losses += 1;
-    r.commission += Number(t.commission_usd) || 0;
-    r.funding += Number(t.funding_usd) || 0;
-    if (t.spread_cost_usd != null) {
-      r.spread += Number(t.spread_cost_usd);
-      r.spreadKnown += 1;
-    }
+    addTrade(t.side === "long" ? r.long : r.short, t);
   }
   for (const p of positions) get(p.strategy).open += 1;
   for (const d of daily) get(d.strategy);
@@ -76,7 +69,7 @@ export default function StrategiesPage() {
     return (
       <main className="space-y-3">
         <h1 className="px-1 text-lg font-semibold">Výkon per stratégia</h1>
-        <p className="card text-sm text-zinc-400">Zatiaľ žiadne dáta.</p>
+        <p className="card text-sm text-muted">Zatiaľ žiadne dáta.</p>
       </main>
     );
   }
@@ -89,9 +82,13 @@ export default function StrategiesPage() {
         const flag = flags.find((f) => f.startsWith(r.strategy));
         const on = flag?.includes(": ON");
         const winRate = r.cycles ? (r.wins / r.cycles) * 100 : 0;
-        const costs = r.commission - r.funding + r.spread;
+        const commission = r.long.commission + r.short.commission;
+        const spread = r.long.spread + r.short.spread;
+        const funding = r.long.funding + r.short.funding;
+        const costs = commission + spread - Math.min(funding, 0);
         const gross = r.pnl + costs;
         const costRatio = gross > 0 ? (costs / gross) * 100 : null;
+        const spreadKnown = r.long.spreadKnown + r.short.spreadKnown;
 
         return (
           <div key={r.strategy} className="card space-y-4">
@@ -101,21 +98,17 @@ export default function StrategiesPage() {
                 <span
                   className={`rounded-full px-2 py-0.5 text-xs ${
                     on
-                      ? "bg-emerald-950 text-emerald-300"
-                      : "bg-zinc-800 text-zinc-400"
+                      ? "bg-emerald-600/15 text-pos"
+                      : "bg-line text-muted"
                   }`}
                 >
                   {on ? "ON" : "OFF"}
                 </span>
               )}
               {r.open > 0 && (
-                <span className="text-xs text-zinc-500">
-                  {r.open} otvorených
-                </span>
+                <span className="text-xs text-faint">{r.open} otvorených</span>
               )}
-              <span
-                className={`ml-auto font-mono text-lg ${pnlClass(r.pnl)}`}
-              >
+              <span className={`ml-auto font-mono text-lg ${pnlClass(r.pnl)}`}>
                 {signed(r.pnl)}
               </span>
             </div>
@@ -140,20 +133,22 @@ export default function StrategiesPage() {
             </div>
 
             <div>
-              <div className="card-title mb-2">Rozpad nákladov</div>
+              <div className="card-title mb-2">Rozpad nákladov spolu</div>
               <CostBar
-                commission={r.commission}
-                spread={r.spread}
-                funding={r.funding}
+                commission={commission}
+                spread={spread}
+                funding={funding}
               />
-              {r.spreadKnown < r.cycles && (
-                <p className="mt-2 text-xs text-zinc-600">
-                  Spread je známy pre {r.spreadKnown} z {r.cycles} obchodov —
-                  bot ho zaznamenáva až od 31. 7. 2026, staršie sa doň
+              {spreadKnown < r.cycles && (
+                <p className="mt-2 text-xs text-faint">
+                  Spread je známy pre {spreadKnown} z {r.cycles} obchodov — bot
+                  ho zaznamenáva až od 31. 7. 2026, staršie sa doň
                   nezapočítavajú.
                 </p>
               )}
             </div>
+
+            <CostSplit long={r.long} short={r.short} />
           </div>
         );
       })}
@@ -181,7 +176,7 @@ function CostBar({
 
   return (
     <>
-      <div className="flex h-2 overflow-hidden rounded-full bg-zinc-800">
+      <div className="flex h-2 overflow-hidden rounded-full bg-line">
         {total > 0 &&
           items.map((i) => (
             <div
@@ -195,8 +190,8 @@ function CostBar({
         {items.map((i) => (
           <span key={i.label} className="flex items-center gap-1.5">
             <span className={`h-2 w-2 rounded-full ${i.cls}`} />
-            <span className="text-zinc-400">{i.label}</span>
-            <span className="font-mono text-zinc-300">
+            <span className="text-muted">{i.label}</span>
+            <span className="font-mono">
               {i.label === "Funding" ? signed(funding) : money(i.v)}
             </span>
           </span>

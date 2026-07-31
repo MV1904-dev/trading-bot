@@ -18,7 +18,7 @@ function Tile({
     <div className="card">
       <div className="card-title">{label}</div>
       <div className={`mt-1 font-mono text-xl ${cls}`}>{value}</div>
-      {sub && <div className="mt-1 text-xs text-zinc-500">{sub}</div>}
+      {sub && <div className="mt-1 text-xs text-faint">{sub}</div>}
     </div>
   );
 }

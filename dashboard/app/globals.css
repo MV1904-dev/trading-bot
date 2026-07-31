@@ -1,23 +1,71 @@
 @import "tailwindcss";
 
-/* Dashboard je zámerne len tmavý — pozerá sa naň väčšinou večer na mobile
-   a striedanie tém by pri farebnom kódovaní P/L (zelená/červená) len
-   zhoršovalo kontrast. */
+/* Trieda .dark na <html> namiesto media query — inak by sa nedala prebiť
+   ručná voľba používateľa uložená v localStorage. */
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* Sémantické farby: komponenty nepoznajú zinc-800 ani emerald-400, len
+   "surface", "muted", "pos". Vďaka tomu má prepínač témy jedno miesto,
+   kde sa mení, a nie stovku dark: variantov po celej aplikácii. */
+@theme inline {
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-solid: var(--solid);
+  --color-line: var(--line);
+  --color-ink: var(--ink);
+  --color-muted: var(--muted);
+  --color-faint: var(--faint);
+  --color-pos: var(--pos);
+  --color-neg: var(--neg);
+  --color-warn: var(--warn);
+  --color-long: var(--long);
+  --color-short: var(--short);
+}
+
 :root {
+  color-scheme: light;
+  --bg: #f4f4f5;
+  --surface: #ffffff;
+  --solid: #ffffff;
+  --line: #e4e4e7;
+  --ink: #18181b;
+  --muted: #52525b;
+  --faint: #71717a;
+  /* V svetlom režime musia byť P/L farby tmavšie, inak na bielej nemajú
+     kontrast; v tmavom naopak svetlejšie. */
+  --pos: #047857;
+  --neg: #be123c;
+  --warn: #b45309;
+  --long: #047857;
+  --short: #0369a1;
+}
+
+.dark {
   color-scheme: dark;
+  --bg: #09090b;
+  --surface: rgb(24 24 27 / 0.6);
+  --solid: #18181b;
+  --line: #27272a;
+  --ink: #f4f4f5;
+  --muted: #a1a1aa;
+  --faint: #71717a;
+  --pos: #34d399;
+  --neg: #fb7185;
+  --warn: #fbbf24;
+  --long: #34d399;
+  --short: #38bdf8;
 }
 
 body {
-  @apply bg-zinc-950 text-zinc-100 antialiased;
+  @apply bg-bg text-ink antialiased;
 }
 
-/* Karta — základný stavebný prvok celého dashboardu. */
 .card {
-  @apply rounded-xl border border-zinc-800 bg-zinc-900/60 p-4;
+  @apply rounded-xl border border-line bg-surface p-4;
 }
 
 .card-title {
-  @apply text-xs font-medium uppercase tracking-wide text-zinc-500;
+  @apply text-xs font-medium uppercase tracking-wide text-faint;
 }
 
 /* @utility (nie .btn) — Tailwind v4 dovolí @apply len na registrovanú
@@ -41,12 +89,12 @@ body {
 }
 
 .btn-ghost {
-  @apply btn border border-zinc-700 text-zinc-300 hover:bg-zinc-800;
+  @apply btn border border-line text-muted hover:bg-line/40;
 }
 
 .input {
-  @apply w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2
-         text-sm outline-none focus:border-emerald-600;
+  @apply w-full rounded-lg border border-line bg-solid px-3 py-2 text-sm
+         text-ink outline-none focus:border-emerald-600;
 }
 
 /* Tabuľky sa na mobile scrollujú vodorovne vo vlastnom kontajneri,
@@ -60,10 +108,10 @@ table.data {
 }
 
 table.data th {
-  @apply whitespace-nowrap border-b border-zinc-800 px-2 py-2 text-left
-         text-xs font-medium uppercase tracking-wide text-zinc-500;
+  @apply whitespace-nowrap border-b border-line px-2 py-2 text-left text-xs
+         font-medium uppercase tracking-wide text-faint;
 }
 
 table.data td {
-  @apply whitespace-nowrap border-b border-zinc-900 px-2 py-2;
+  @apply whitespace-nowrap border-b border-line/50 px-2 py-2;
 }

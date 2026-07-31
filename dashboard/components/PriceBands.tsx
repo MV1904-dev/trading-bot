@@ -24,20 +24,20 @@ export default function PriceBands({ state }: { state: BotState | null }) {
         <span className="font-mono text-lg">{price(px)}</span>
       </div>
 
-      <div className="relative mt-4 h-2 rounded-full bg-zinc-800">
+      <div className="relative mt-4 h-2 rounded-full bg-line">
         <div
           className={`absolute top-1/2 h-4 w-1 -translate-y-1/2 rounded
                       ${outside ? "bg-rose-400" : "bg-emerald-400"}`}
           style={{ left: `calc(${pos}% - 2px)` }}
         />
       </div>
-      <div className="mt-2 flex justify-between text-xs text-zinc-500">
+      <div className="mt-2 flex justify-between text-xs text-faint">
         <span>{price(lo)}</span>
         <span>{price(hi)}</span>
       </div>
 
       {outside && (
-        <p className="mt-3 text-sm text-rose-400">
+        <p className="mt-3 text-sm text-neg">
           Kurz je mimo gridového pásma — nové vstupy sa neotvárajú.
         </p>
       )}

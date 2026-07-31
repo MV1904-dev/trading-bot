@@ -2,7 +2,9 @@
 
 import { useMemo, useState } from "react";
 import { useLive } from "@/lib/useLive";
-import { dateTime, money, pnlClass, price, signed } from "@/lib/format";
+import {
+  dateTime, heldFor, holdClass, holdMs, money, pnlClass, price, signed,
+} from "@/lib/format";
 import type { Trade } from "@/lib/types";
 
 const PERIODS = [
@@ -47,12 +49,13 @@ export default function HistoryPage() {
   function exportCsv() {
     const head = [
       "id", "strategia", "par", "smer", "qty", "vstup", "tp", "vystup",
-      "otvorene", "zavrete", "hruby_pnl", "provizia", "funding", "spread",
+      "otvorene", "zavrete", "drzane_h", "hruby_pnl", "provizia", "funding", "spread",
       "cisty_pnl", "rucne_zatvorene",
     ];
     const rows = filtered.map((t) => [
       t.id, t.strategy, t.symbol, t.side, t.qty, t.entry_price, t.tp_price ?? "",
       t.close_price ?? "", t.opened_at, t.closed_at ?? "",
+      t.closed_at ? (holdMs(t.opened_at, t.closed_at) / 3_600_000).toFixed(2) : "",
       t.gross_pnl_usd ?? "", t.commission_usd, t.funding_usd,
       t.spread_cost_usd ?? "", t.pnl_usd ?? "", t.manual_close ? "ano" : "nie",
     ]);
@@ -90,7 +93,7 @@ export default function HistoryPage() {
         </div>
 
         <div className="flex flex-wrap items-center gap-3">
-          <span className="text-sm text-zinc-400">
+          <span className="text-sm text-muted">
             {filtered.length} obchodov ·{" "}
             <span className={`font-mono ${pnlClass(sum)}`}>{signed(sum)}</span>
           </span>
@@ -105,7 +108,7 @@ export default function HistoryPage() {
       </div>
 
       {filtered.length === 0 ? (
-        <p className="card text-sm text-zinc-400">
+        <p className="card text-sm text-muted">
           Žiadne obchody pre zvolený filter.
         </p>
       ) : (
@@ -118,6 +121,7 @@ export default function HistoryPage() {
                   <th>Zavreté</th>
                   <th>Stratégia</th>
                   <th>Smer</th>
+                  <th>Držané</th>
                   <th>Vstup → Výstup</th>
                   <th className="text-right">Provízia</th>
                   <th className="text-right">Funding</th>
@@ -127,31 +131,36 @@ export default function HistoryPage() {
               <tbody>
                 {filtered.map((t) => (
                   <tr key={t.id}>
-                    <td className="text-zinc-500">
+                    <td className="text-faint">
                       {t.id}
                       {t.manual_close && (
                         <span
                           title="Ručne zatvorené z dashboardu"
-                          className="ml-1 text-amber-400"
+                          className="ml-1 text-warn"
                         >
                           ✋
                         </span>
                       )}
                     </td>
-                    <td className="text-zinc-400">{dateTime(t.closed_at)}</td>
+                    <td className="text-muted">{dateTime(t.closed_at)}</td>
                     <td>{t.strategy}</td>
                     <td
                       className={
-                        t.side === "long" ? "text-emerald-400" : "text-sky-400"
+                        t.side === "long" ? "text-long" : "text-short"
                       }
                     >
                       {t.side === "long" ? "LONG" : "SHORT"}{" "}
-                      <span className="text-zinc-500">{money(t.qty, 0)}</span>
+                      <span className="text-faint">{money(t.qty, 0)}</span>
+                    </td>
+                    <td
+                      className={`font-mono ${holdClass(holdMs(t.opened_at, t.closed_at))}`}
+                    >
+                      {heldFor(t.opened_at, t.closed_at)}
                     </td>
                     <td className="font-mono">
                       {price(t.entry_price)} → {price(t.close_price)}
                     </td>
-                    <td className="text-right font-mono text-zinc-400">
+                    <td className="text-right font-mono text-muted">
                       −{money(t.commission_usd)}
                     </td>
                     <td
