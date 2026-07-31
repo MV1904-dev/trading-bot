@@ -881,9 +881,70 @@ class CTraderBot:
                 "swap_rollover_3days": sym["swap_rollover_3days"],
             }
             self._capital_ts = time.time()
+            self._check_swap_drift(self._capital)
         except CTraderError as exc:
             log.warning("Kapitál/swap sa nepodarilo načítať: %s", exc)
         return self._capital
+
+    # Prahy pre alarm na zmenu swapu. Relatívny chytí posun sadzby,
+    # absolútny chytí prípad, keď bola sadzba blízko nuly — tam by
+    # percento nikdy nevystrelilo, hoci lacná strana práve zdražela.
+    SWAP_REL = 0.25
+    SWAP_ABS = 0.15
+
+    def _check_swap_drift(self, cap: dict) -> None:
+        """Ustráži úrokový diferenciál.
+
+        Grid stojí na tom, že jedna strana je lacná — na EURUSD platí short
+        23× menej než long. Keby broker sadzby prehodil, náklad držania by
+        vyskočil a zistili by sme to až z účtovania o dni neskôr.
+        """
+        cur_l = cap.get("swap_long")
+        cur_s = cap.get("swap_short")
+        if cur_l is None or cur_s is None:
+            return
+        prev = self.db.meta_get("swap_rates", "")
+        self.db.meta_set("swap_rates", f"{cur_l}|{cur_s}")
+        if not prev:
+            return                      # prvý beh — nie je s čím porovnať
+        try:
+            old_l, old_s = (float(x) for x in prev.split("|"))
+        except ValueError:
+            return
+        if (old_l, old_s) == (cur_l, cur_s):
+            return
+
+        moved = []
+        for name, old, cur in (("long", old_l, cur_l), ("short", old_s, cur_s)):
+            delta = cur - old
+            if abs(delta) < self.SWAP_ABS and abs(delta) < abs(old) * self.SWAP_REL:
+                continue
+            moved.append(f"{name} {old:+.4f} → {cur:+.4f} ({delta:+.4f})")
+        if not moved:
+            return
+
+        # Prehodenie lacnej strany je vážnejšie než samotná zmena sadzby:
+        # mriežka je postavená na tom, ktorá strana je lacná.
+        old_cheap = "short" if abs(old_s) < abs(old_l) else "long"
+        new_cheap = "short" if abs(cur_s) < abs(cur_l) else "long"
+        flip = old_cheap != new_cheap
+        sign = (old_l <= 0 < cur_l) or (old_s <= 0 < cur_s)
+
+        head = "🔄 Swap sadzby sa zmenili"
+        if flip:
+            head = "🚨 Swap: PREHODILA SA LACNÁ STRANA"
+        elif sign:
+            head = "💰 Swap: jedna strana začala platiť TEBE"
+
+        msg = (f"{head} ({self.cfg.SYMBOL})\n" + "\n".join(moved))
+        if flip:
+            msg += (f"\nLacná strana bola <b>{old_cheap}</b>, teraz je "
+                    f"<b>{new_cheap}</b> — mriežka drží prevažne "
+                    f"{old_cheap}y.")
+        self.tg.send(msg)
+        self.db.log_event("alarm" if flip else "info",
+                          f"swap zmena: {'; '.join(moved)}")
+        log.warning("Swap sadzby sa zmenili: %s", "; ".join(moved))
 
     def _margin_now(self, equity: float) -> dict:
         """Využitie marže. ProtoOATrader maržu nenesie, takže ju skladáme
