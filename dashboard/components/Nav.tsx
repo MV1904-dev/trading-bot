@@ -33,7 +33,7 @@ export default function Nav() {
       </header>
 
       <nav
-        className="fixed inset-x-0 bottom-0 z-20 border-t border-line
+        className="bottom-nav fixed inset-x-0 bottom-0 z-20 border-t border-line
                    bg-bg/95 backdrop-blur sm:hidden"
       >
         <ul className="mx-auto flex max-w-5xl">

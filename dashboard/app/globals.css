@@ -60,6 +60,12 @@ body {
   @apply bg-bg text-ink antialiased;
 }
 
+/* V standalone režime na iPhone siaha obsah pod výrez aj pod domovskú
+   čiaru — spodná navigácia by inak končila pod ňou. */
+nav.bottom-nav {
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
 .card {
   @apply rounded-xl border border-line bg-surface p-4;
 }

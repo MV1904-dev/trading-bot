@@ -6,11 +6,20 @@ import Nav from "@/components/Nav";
 export const metadata: Metadata = {
   title: "Trading bot",
   description: "cTrader grid bot — stav, pozície, výkon",
+  // Bez toho iOS ignoruje standalone režim z manifestu.
+  appleWebApp: { capable: true, title: "Bot", statusBarStyle: "black-translucent" },
 };
 
 export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
+  // Lišta prehliadača sa zladí s témou stránky.
+  themeColor: [
+    { media: "(prefers-color-scheme: light)", color: "#f4f4f5" },
+    { media: "(prefers-color-scheme: dark)", color: "#09090b" },
+  ],
+  // Bezpečná zóna pod výrezom na iPhone.
+  viewportFit: "cover",
 };
 
 /**
