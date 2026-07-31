@@ -66,9 +66,14 @@ class SupabaseSync:
         data = json.dumps(body).encode() if body is not None else None
         headers = {
             "apikey": self.key,
-            "Authorization": f"Bearer {self.key}",
             "Content-Type": "application/json",
         }
+        # Nové sb_secret_ kľúče nie sú JWT a na hlavičke Authorization ich
+        # časť Supabase odmieta — patria výhradne do `apikey`. Legacy
+        # service_role JWT naopak Authorization očakáva, takže ju pridáme
+        # len preň.
+        if self.key.startswith("eyJ"):
+            headers["Authorization"] = f"Bearer {self.key}"
         if prefer:
             headers["Prefer"] = prefer
         req = urllib.request.Request(url, data=data, headers=headers,
