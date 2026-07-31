@@ -933,8 +933,13 @@ class CTraderBot:
                     "context": ctx,
                 })
                 newest = max(newest, r["ts_close"] or 0)
-            if newest > since:
-                self.db.meta_set("sb_trades_until", newest)
+            # Značku posúvame až podľa toho, čo Supabase potvrdila. Keby sa
+            # posúvala tu, každý výpadok siete by tichom preskočil obchody,
+            # ktoré sa medzitým zavreli — presne to sa stalo pri 401 na
+            # zlom kľúči a história sa nikdy neodoslala.
+            confirmed = self.sync.confirmed_trades_until
+            if confirmed > since:
+                self.db.meta_set("sb_trades_until", confirmed)
 
             daily = [{
                 "day": d["day"], "strategy": d["strategy"],
@@ -974,6 +979,7 @@ class CTraderBot:
                 },
                 "positions": positions,
                 "trades": trades,
+                "trades_until": newest,
                 "daily": daily,
                 "account": {
                     "balance": bal or 0.0,

@@ -54,6 +54,12 @@ class SupabaseSync:
         self._cmd_queue: queue.Queue = queue.Queue()
         self._last_equity = 0.0
         self._fail_streak = 0
+        self._last_ok = False
+        # Posledný ts_close, ktorý Supabase POTVRDILA. Obchodné vlákno
+        # si ho odtiaľto prevezme a až potom posunie značku v SQLite —
+        # keby sa posúvala pri stavaní snapshotu, výpadok siete by
+        # históriu ticho preskočil.
+        self.confirmed_trades_until: float = 0.0
         if not self.enabled:
             log.info("Supabase sync vypnutý (chýba SUPABASE_URL/SERVICE_KEY).")
 
@@ -78,10 +84,12 @@ class SupabaseSync:
             headers["Prefer"] = prefer
         req = urllib.request.Request(url, data=data, headers=headers,
                                      method=method)
+        self._last_ok = False
         try:
             with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT) as r:
                 raw = r.read()
                 self._fail_streak = 0
+                self._last_ok = True
                 return json.loads(raw) if raw else None
         except urllib.error.HTTPError as exc:
             detail = exc.read().decode(errors="replace")[:300]
@@ -97,14 +105,19 @@ class SupabaseSync:
         return None
 
     def _upsert(self, table: str, rows: list[dict],
-                on_conflict: str = "") -> None:
+                on_conflict: str = "") -> bool:
+        """True = zapísané (alebo nebolo čo zapisovať)."""
         if not rows:
-            return
+            return True
         path = table
         if on_conflict:
             path += f"?on_conflict={on_conflict}"
+        # _req vracia None aj pri úspechu (return=minimal má prázdne telo),
+        # preto sa úspech číta z explicitného príznaku, nie z návratovej
+        # hodnoty.
         self._req("POST", path, rows,
                   prefer="resolution=merge-duplicates,return=minimal")
+        return self._last_ok
 
     # --- verejné API ------------------------------------------------------
     def trigger(self) -> None:
@@ -163,7 +176,11 @@ class SupabaseSync:
         else:
             self._req("DELETE", "positions?id=gte.0")
 
-        self._upsert("trades", snap.get("trades") or [], on_conflict="id")
+        if self._upsert("trades", snap.get("trades") or [],
+                        on_conflict="id"):
+            self.confirmed_trades_until = max(
+                self.confirmed_trades_until,
+                float(snap.get("trades_until") or 0.0))
         self._upsert("daily_cycles", snap.get("daily") or [],
                      on_conflict="day,strategy")
 
