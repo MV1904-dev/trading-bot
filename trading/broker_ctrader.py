@@ -491,7 +491,11 @@ class CTraderBroker:
                 "close_price": d.executionPrice,
                 "gross": cpd.grossProfit / 10 ** digits,
                 "swap": cpd.swap / 10 ** digits,
-                "commission": (abs(cpd.commission)
-                               + abs(getattr(d, "commission", 0))) / 10 ** digits,
+                # POZOR: cpd.commission je provízia za CELÚ pozíciu (otvorenie
+                # + zatvorenie), kým d.commission je provízia len tohto dealu.
+                # Sčítavali sme oboje, čím sa zatvárací deal počítal dvakrát
+                # a provízia vychádzala o 50 % vyššia (10k: 1,35 namiesto
+                # 0,90 — overené na surovom ProtoOADealListRes).
+                "commission": abs(cpd.commission) / 10 ** digits,
             }
         return out
