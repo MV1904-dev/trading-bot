@@ -51,5 +51,10 @@ export async function middleware(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|ico)$).*)"],
+  // manifest a ikony musia byť dostupné aj neprihlásenému — prehliadač
+  // ich ťahá pred akýmkoľvek prihlásením a bez nich sa aplikácia nedá
+  // poriadne pridať na plochu.
+  matcher: [
+    "/((?!_next/static|_next/image|favicon.ico|manifest.webmanifest|icon|apple-icon|.*\\.(?:svg|png|ico)$).*)",
+  ],
 };
