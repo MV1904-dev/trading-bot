@@ -196,6 +196,12 @@ class SupabaseSync:
                 "open_positions": acct.get("open_positions", 0),
             }], prefer="resolution=merge-duplicates,return=minimal")
 
+    def push_calendar(self, rows: list[dict]) -> None:
+        """Kalendár udalostí. Kľúč je (ts, currency, title), takže
+        opakovaný push tie isté udalosti len prepíše."""
+        self._upsert("calendar_events", rows,
+                     on_conflict="ts,currency,title")
+
     # --- príkazy ----------------------------------------------------------
     def _cmd_loop(self) -> None:
         while not self._stop.is_set():

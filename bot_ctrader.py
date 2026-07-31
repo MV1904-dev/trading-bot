@@ -180,6 +180,9 @@ class CTraderBot:
         # (10 s), takže hodnotu cacheujeme a obnovujeme raz za 5 minút.
         self._last_balance: float = 0.0
         self._balance_ts: float = 0.0
+        self._capital: dict = {}
+        self._capital_ts: float = 0.0
+        self._calendar_ts: float = 0.0
 
     # ------------------------------------------------------------------ #
     def _guard_demo(self) -> None:
@@ -365,6 +368,7 @@ class CTraderBot:
         self._drain_commands()
         self._drain_sb_commands()
         self._refresh_sync_snapshot()
+        self._push_calendar()
 
     def _price(self) -> dict | None:
         q = self.broker.quote()
@@ -846,6 +850,59 @@ class CTraderBot:
                          + self._commands_help())
 
     # --- Supabase zrkadlo a príkazy z dashboardu -------------------------
+    def _capital_cached(self, max_age_s: float = 6 * 3600) -> dict:
+        """Vklady/výbery a swap sadzby. Oboje sa mení zriedka, ale bez nich
+        sa nedá spočítať návratnosť ani predpovedať náklad držania.
+
+        Cash flow je 17 dotazov (týždenné okná), preto raz za 6 hodín.
+        """
+        if time.time() - self._capital_ts <= max_age_s and self._capital:
+            return self._capital
+        try:
+            flows = self.broker.cash_flow(days=120)
+            sym = self.broker.symbol_details()
+            self._capital = {
+                "deposits_net": sum(f["delta"] for f in flows),
+                "deposits_count": len(flows),
+                "swap_long": sym["swap_long"],
+                "swap_short": sym["swap_short"],
+                "swap_rollover_3days": sym["swap_rollover_3days"],
+            }
+            self._capital_ts = time.time()
+        except CTraderError as exc:
+            log.warning("Kapitál/swap sa nepodarilo načítať: %s", exc)
+        return self._capital
+
+    def _margin_now(self, equity: float) -> dict:
+        """Využitie marže. ProtoOATrader maržu nenesie, takže ju skladáme
+        z otvorených pozícií (reconcile vracia usedMargin per pozícia)."""
+        try:
+            used = sum(p.get("used_margin", 0.0) for p in self.broker.positions())
+        except CTraderError as exc:
+            log.debug("Maržu sa nepodarilo zistiť: %s", exc)
+            return {}
+        return {
+            "used_margin": used,
+            "free_margin": equity - used,
+            "margin_level": (equity / used * 100) if used else None,
+        }
+
+    def _push_calendar(self) -> None:
+        """Nahrá high-impact udalosti do Supabase (raz za hodinu)."""
+        if not self.sync.enabled:
+            return
+        if time.time() - self._calendar_ts < 3600:
+            return
+        self._calendar_ts = time.time()
+        rows = [{
+            "ts": _iso_utc(e["ts"]),
+            "currency": e["currency"],
+            "title": e["title"],
+            "impact": e.get("impact", "high"),
+        } for e in self.macro.events]
+        if rows:
+            self.sync.push_calendar(rows)
+
     def _balance_cached(self, max_age_s: float = 300.0) -> float:
         if time.time() - self._balance_ts > max_age_s:
             try:
@@ -961,6 +1018,11 @@ class CTraderBot:
 
             bal = balance if balance is not None else self._balance_cached()
             reason = self._blocked_reason()
+            equity = (bal or 0.0) + floating
+            cap = self._capital_cached()
+            margin = self._margin_now(equity) if positions else {
+                "used_margin": 0.0, "free_margin": equity,
+                "margin_level": None}
             snap = {
                 "state": {
                     "running": True,
@@ -978,6 +1040,8 @@ class CTraderBot:
                     "equity": (bal + floating) if bal else None,
                     "floating_pnl": floating,
                     "config": self._config_dict(),
+                    **cap,
+                    **margin,
                 },
                 "positions": positions,
                 "trades": trades,

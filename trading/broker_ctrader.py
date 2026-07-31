@@ -31,10 +31,12 @@ from typing import Optional
 
 from ctrader_open_api import Client, EndPoints, Protobuf, TcpProtocol
 from ctrader_open_api.messages.OpenApiMessages_pb2 import (
-    ProtoOAAccountAuthReq, ProtoOAApplicationAuthReq, ProtoOAClosePositionReq,
+    ProtoOAAccountAuthReq, ProtoOAApplicationAuthReq,
+    ProtoOACashFlowHistoryListReq, ProtoOAClosePositionReq,
     ProtoOADealListReq, ProtoOAGetAccountListByAccessTokenReq,
     ProtoOAGetTrendbarsReq, ProtoOANewOrderReq, ProtoOAReconcileReq,
-    ProtoOASubscribeSpotsReq, ProtoOASymbolsListReq, ProtoOATraderReq)
+    ProtoOASubscribeSpotsReq, ProtoOASymbolByIdReq, ProtoOASymbolsListReq,
+    ProtoOATraderReq)
 from ctrader_open_api.messages.OpenApiModelMessages_pb2 import (
     ProtoOAOrderType, ProtoOATradeSide, ProtoOATrendbarPeriod)
 
@@ -443,6 +445,58 @@ class CTraderBroker:
 
     def open_position_ids(self) -> set:
         return {p["position_id"] for p in self.positions()}
+
+    def cash_flow(self, days: int = 120) -> list[dict]:
+        """Vklady a výbery za posledných `days` dní.
+
+        API dovolí okno najviac 7 dní na dotaz (INCORRECT_BOUNDARIES),
+        takže sa stránkuje po týždňoch. Bez toho sa nedá zistiť, koľko
+        kapitálu je do účtu reálne vložené — balance to nepovie, lebo
+        obsahuje aj zisk.
+        """
+        week_ms = 7 * 86_400 * 1000
+        now_ms = int(time.time() * 1000)
+        out: list[dict] = []
+        for i in range(max(1, (days + 6) // 7)):
+            req = ProtoOACashFlowHistoryListReq()
+            req.ctidTraderAccountId = self.account_id
+            req.fromTimestamp = now_ms - (i + 1) * week_ms + 1000
+            req.toTimestamp = now_ms - i * week_ms
+            try:
+                res = self._send(req, timeout=20)
+            except CTraderError as exc:
+                log.warning("Cash flow okno %d zlyhalo: %s", i, exc)
+                continue
+            for c in res.depositWithdraw:
+                digits = getattr(c, "moneyDigits", 2) or 2
+                out.append({
+                    "ts": c.changeBalanceTimestamp / 1000.0,
+                    "type": int(c.operationType),
+                    "delta": c.delta / 10 ** digits,
+                    "balance_after": c.balance / 10 ** digits,
+                    "note": getattr(c, "externalNote", "") or "",
+                })
+        out.sort(key=lambda r: r["ts"])
+        return out
+
+    def symbol_details(self) -> dict:
+        """Swap sadzby a parametre symbolu (pre predpoveď nákladu držania)."""
+        req = ProtoOASymbolByIdReq()
+        req.ctidTraderAccountId = self.account_id
+        req.symbolId.append(self.symbol_id)
+        res = self._send(req, timeout=20)
+        if not res.symbol:
+            raise CTraderError("Symbol detail neprišiel.")
+        s = res.symbol[0]
+        return {
+            "swap_long": getattr(s, "swapLong", 0),
+            "swap_short": getattr(s, "swapShort", 0),
+            "swap_calculation_type": int(getattr(s, "swapCalculationType", 0)),
+            "swap_rollover_3days": int(getattr(s, "swapRollover3Days", 0)),
+            "swap_time": int(getattr(s, "swapTime", 0)),
+            "lot_size": getattr(s, "lotSize", 0),
+            "pip_position": getattr(s, "pipPosition", 4),
+        }
 
     def close_position(self, position_id: int,
                        units: float = 0.0) -> dict:
