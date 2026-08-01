@@ -181,6 +181,8 @@ class CTraderBot:
         self._last_balance: float = 0.0
         self._balance_ts: float = 0.0
         self._capital: dict = {}
+        self._margin_cache: dict = {}
+        self._margin_ts: float = 0.0
         self._capital_ts: float = 0.0
         self._calendar_ts: float = 0.0
 
@@ -456,6 +458,26 @@ class CTraderBot:
         self.last_md_ts = time.time()
         self._last_resub = 0.0
 
+    @staticmethod
+    def _market_closed(now: float | None = None) -> bool:
+        """Je forexový trh zatvorený?
+
+        Týždeň beží od nedeľného otvorenia Sydney (21:00 UTC) do piatkového
+        zatvorenia New Yorku (21:00 UTC). Cez víkend nechodia žiadne ticky —
+        watchdog to bez tejto kontroly čítal ako mŕtvy stream a reštartoval
+        proces každých 15 minút celý víkend (1. 8. 2026: 31 reštartov do
+        soboty predpoludním, každý s Telegram hláškou).
+        """
+        t = datetime.fromtimestamp(now or time.time(), timezone.utc)
+        wd, hour = t.weekday(), t.hour        # pondelok = 0, nedeľa = 6
+        if wd == 5:                            # sobota celá
+            return True
+        if wd == 4 and hour >= 21:             # piatok po 21:00 UTC
+            return True
+        if wd == 6 and hour < 21:              # nedeľa do 21:00 UTC
+            return True
+        return False
+
     def _maybe_reconnect(self) -> None:
         """Trojstupňová obrana mŕtveho streamu:
         1. spojenie žije, ale spoty nechodia > 3 min → re-subscribe (lacné;
@@ -465,6 +487,11 @@ class CTraderBot:
            tvrdý reštart procesu (wrapper zdvihne čistú inštanciu)"""
         now = time.time()
         dead_s = now - self.last_md_ts
+
+        # Cez víkend ticky nechodia zo svojej podstaty — ani
+        # re-subscribe, ani tvrdý reštart nič nevyriešia.
+        if self._market_closed(now):
+            return
 
         if self.broker.is_connected() and dead_s > 180 \
                 and now - getattr(self, "_last_resub", 0) > 120:
@@ -487,6 +514,8 @@ class CTraderBot:
 
     def _maybe_gap_alarm(self) -> None:
         stale = time.time() - self.last_md_ts
+        if self._market_closed():
+            return
         if stale > self.cfg.DATA_GAP_ALARM_S and not self._gap_alarmed:
             self.auto_paused = True
             self._gap_alarmed = True
@@ -946,14 +975,25 @@ class CTraderBot:
                           f"swap zmena: {'; '.join(moved)}")
         log.warning("Swap sadzby sa zmenili: %s", "; ".join(moved))
 
-    def _margin_now(self, equity: float) -> dict:
+    def _margin_now(self, equity: float, max_age_s: float = 60.0) -> dict:
         """Využitie marže. ProtoOATrader maržu nenesie, takže ju skladáme
-        z otvorených pozícií (reconcile vracia usedMargin per pozícia)."""
+        z otvorených pozícií (reconcile vracia usedMargin per pozícia).
+
+        Cachujeme: snapshot sa stavia každý tick (10 s) a bez cache to
+        znamenalo reconcile request na brokera šesťkrát za minútu.
+        """
+        if (time.time() - self._margin_ts <= max_age_s
+                and self._margin_cache):
+            used = self._margin_cache["used_margin"]
+            return {"used_margin": used, "free_margin": equity - used,
+                    "margin_level": (equity / used * 100) if used else None}
         try:
             used = sum(p.get("used_margin", 0.0) for p in self.broker.positions())
         except CTraderError as exc:
             log.debug("Maržu sa nepodarilo zistiť: %s", exc)
-            return {}
+            return self._margin_cache or {}
+        self._margin_ts = time.time()
+        self._margin_cache = {"used_margin": used}
         return {
             "used_margin": used,
             "free_margin": equity - used,
