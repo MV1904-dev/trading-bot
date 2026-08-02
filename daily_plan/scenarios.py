@@ -102,19 +102,29 @@ def _build_directional(side: str, kind: str, price: float, atr_d1: float,
     sl = min(struct_sl, min_sl) if side == "buy" else max(struct_sl, min_sl)
     risk = abs(entry - sl)
 
-    # TP na protizóny, ktoré spĺňajú RR
+    # TP na protizóny. Vyberá sa NAJSILNEJŠIA zóna spĺňajúca RR, nie prvá
+    # v ceste — prvá vyhovujúca vedela poslať TP2 na slabú zónu tesne pred
+    # najsilnejšou úrovňou plánu (sila 2 pred silou 6, 3. 8. 2026).
     opposite = res if side == "buy" else sup
-    tp1 = tp2 = rr1 = rr2 = None
+    cands = []
     for z in opposite:
         target = z.mid
         rr = (target - entry) / risk if side == "buy" else (entry - target) / risk
-        if rr <= 0:
-            continue
-        if tp1 is None and rr >= TP1_MIN_RR:
-            tp1, rr1 = target, rr
-        elif tp1 is not None and rr >= TP2_MIN_RR and tp2 is None:
-            tp2, rr2 = target, rr
-            break
+        if rr > 0:
+            cands.append((z, target, rr))
+    tp1 = tp2 = rr1 = rr2 = None
+    obstacles: list = []
+    c1 = [c for c in cands if c[2] >= TP1_MIN_RR]
+    if c1:
+        z1, tp1, rr1 = max(c1, key=lambda c: (c[0].strength, -c[2]))
+        # prekážky: zóny so silou ≥ 2 medzi vstupom a TP1, ktoré samy RR
+        # nespĺňajú — cieľ ich nevymaže, cena cez ne musí prejsť
+        obstacles = [c[0] for c in cands
+                     if c[2] < rr1 and c[0].strength >= 2 and c[0] is not z1
+                     and c[2] < TP1_MIN_RR]
+        c2 = [c for c in cands if c[2] >= max(TP2_MIN_RR, rr1 + 0.1)]
+        if c2:
+            _, tp2, rr2 = max(c2, key=lambda c: (c[0].strength, -c[2]))
 
     inval = [f"denný close za {sl:.5f} pred aktiváciou",
              "T1 udalosť v okne pred vstupom",
@@ -127,10 +137,14 @@ def _build_directional(side: str, kind: str, price: float, atr_d1: float,
         "rejection": f"H1 close späť do zóny {lo:.5f}–{hi:.5f} po preniknutí",
     }[kind]
 
+    note = (f"zóna sila {entry_zone.strength}: "
+            f"{', '.join(entry_zone.sources[:3])}")
+    if obstacles:
+        note += (" | POZOR: cesta k TP1 vedie cez "
+                 + "; ".join(f"{z.low:.5f}–{z.high:.5f} (sila {z.strength})"
+                             for z in obstacles[:2]))
     return Scenario(tag, side, kind, trig, lo, hi, sl, tp1, tp2, rr1, rr2,
-                    invalidation=inval,
-                    note=f"zóna sila {entry_zone.strength}: "
-                         f"{', '.join(entry_zone.sources[:3])}")
+                    invalidation=inval, note=note)
 
 
 def vote_bias(macro: Macro, structure: Structure, news_bias: str | None) -> str:

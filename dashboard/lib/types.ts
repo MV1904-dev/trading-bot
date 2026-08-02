@@ -139,6 +139,7 @@ export type DailyPlan = {
     L5_news: { label?: string; text?: string }[];
   };
   scenarios: Scenario[];
+  narrative: string | null;
   status: "pending" | "approved" | "rejected" | "expired";
   approved_at: string | null;
   decided_note: string | null;

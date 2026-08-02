@@ -1,0 +1,16 @@
+# Denný cyklus Daily Plan Engine (§1 kroky 1–5): vygeneruje plán na
+# nasledujúci obchodný deň a pošle ho do Supabase na schválenie.
+# Spúšťa ho ctrader-plan.timer o 21:35 UTC Ne–Št (po NY close, keď má
+# bot čerstvý dump sviečok z 21:30 cyklu).
+[Unit]
+Description=Daily Plan Engine — vygeneruj plán na ďalší deň
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=marian
+WorkingDirectory=/home/marian/trading-bot
+ExecStart=/home/marian/trading-bot/.venv/bin/python -m daily_plan.build_plan --push
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=ctrader-plan

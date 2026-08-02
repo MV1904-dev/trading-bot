@@ -1,0 +1,9 @@
+[Unit]
+Description=Denný plán o 21:35 UTC, nedeľa až štvrtok
+
+[Timer]
+OnCalendar=Sun,Mon,Tue,Wed,Thu 21:35 UTC
+Persistent=false
+
+[Install]
+WantedBy=timers.target

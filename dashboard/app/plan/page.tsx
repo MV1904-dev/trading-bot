@@ -91,6 +91,17 @@ export default function PlanPage() {
         {msg && <p className="mt-2 text-xs text-muted">{msg}</p>}
       </Section>
 
+      {plan.narrative && (
+        <Section
+          title="Ako o tom uvažujem"
+          info="Text sa generuje z tých istých dát ako plán — popisuje skutočnú úvahu enginu a nemôže sa od čísel rozísť."
+        >
+          <p className="whitespace-pre-line text-sm leading-relaxed text-muted">
+            {plan.narrative}
+          </p>
+        </Section>
+      )}
+
       <Section
         title="Prečo"
         info="L1 makro je zatiaľ len úrokový diferenciál ECB−Fed a jeho týždenná zmena; 2Y výnosy US−DE nie sú napojené. L5 správy nie sú napojené vôbec. Bias teda stojí na L1 a L2."

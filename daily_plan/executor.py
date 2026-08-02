@@ -84,9 +84,37 @@ class Executor:
         return None
 
     # --- vstup ------------------------------------------------------------
+    T2_GUARD_MIN = 30
+
+    def _t2_blocked(self, plan: dict) -> str | None:
+        """±30 min okolo T2 udalosti sa nevstupuje (§L4). T1 blokuje celý
+        deň už scenario engine cez A2; T2 chránime tu, lebo závisí od
+        aktuálneho času, nie od plánu."""
+        now = datetime.now(timezone.utc)
+        for e in (plan.get("context") or {}).get("L4_events", []):
+            if e.get("tier") != 2:
+                continue
+            try:
+                ts = datetime.fromisoformat(e["ts"])
+            except (KeyError, ValueError):
+                continue
+            if abs((now - ts).total_seconds()) <= self.T2_GUARD_MIN * 60:
+                return f"{ts:%H:%M} {e.get('title', '?')}"
+        return None
+
     def try_enter(self, plan: dict, scn: dict, price: float,
                   h1_closed: float | None) -> bool:
         pd_ = plan["plan_date"]
+
+        blocked = self._t2_blocked(plan)
+        if blocked:
+            if not self._trigger_hit(scn, price, h1_closed):
+                return False
+            self.j.deviation("t2_guard",
+                             f"trigger {scn['tag']} padol v T2 okne ({blocked}) "
+                             f"— vstup vynechaný", pd_)
+            self.notify(f"vstup {scn['tag']} vynechaný — T2 okno ({blocked})")
+            return False
 
         if self.j.traded_today(pd_) >= 1:
             return False                       # §4: max 1 vstup denne

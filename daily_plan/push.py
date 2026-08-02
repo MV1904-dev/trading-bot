@@ -35,6 +35,11 @@ def push(plan: dict) -> bool:
         print(f"plán {plan['plan_date']} je už {existing[0]['status']} "
               f"— neprepisujem")
         return False
+    if existing:
+        # pending je návrh — nahrádza sa celý. UPDATE by odmietol DB trigger
+        # (plán je nemenný), preto DELETE + INSERT.
+        sb._req("DELETE", f"daily_plans?plan_date=eq.{plan['plan_date']}"
+                          f"&status=eq.pending")
 
     row = {
         "plan_date": plan["plan_date"],
@@ -46,6 +51,7 @@ def push(plan: dict) -> bool:
         "atr_d1_pips": plan["atr_d1_pips"],
         "equity": plan["equity"],
         "context": plan["context"],
+        "narrative": plan.get("narrative"),
         "scenarios": plan["scenarios"],
         "status": "pending",
     }

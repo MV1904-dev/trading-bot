@@ -38,7 +38,8 @@ def next_trading_day(d: date) -> date:
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--equity", type=float, default=5000.0)
+    ap.add_argument("--equity", type=float, default=None,
+                    help="prebije virtuálnu equity z denníka (na testy)")
     ap.add_argument("--date", help="obchodný deň (default: najbližší ďalší)")
     ap.add_argument("--stdout", action="store_true",
                     help="vypíš plán, nezapisuj (na skúšku)")
@@ -66,6 +67,13 @@ def main() -> int:
     day = date.fromisoformat(a.date) if a.date else next_trading_day(
         datetime.now(timezone.utc).date())
 
+    # Objem sa počíta z VIRTUÁLNEJ equity Daily Planu (vklad + vlastné
+    # P/L), nie zo zostatku účtu — ten hýbe grid a 0,5 % by prestalo
+    # byť 0,5 %.
+    if a.equity is None:
+        from daily_plan.journal import Journal
+        a.equity = Journal().virtual_equity()
+
     macro = build_macro(Rates(), day)
     structure = build_structure(d1, w1, price)
     sup, res = build_zones(d1, w1, h4, price, structure)
@@ -77,6 +85,8 @@ def main() -> int:
     plan = emit.to_json(day, price, atr_d1, macro, structure, sup, res,
                         events, scns, a.equity, news=None)
 
+    from daily_plan.narrative import build_narrative
+    plan["narrative"] = build_narrative(plan)
     plan["data_source"] = source
     staleness = (datetime.now(timezone.utc) - h1[-1].ts).days
     if staleness > 2:
