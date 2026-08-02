@@ -9,11 +9,16 @@ import ThemeToggle from "@/components/ThemeToggle";
     statickejšia sekcia, tak idú pod „ďalšie". */
 const MAIN = [
   { href: "/", label: "Prehľad", icon: HomeIcon },
+  { href: "/plan", label: "Plán", icon: PlanIcon },
   { href: "/positions", label: "Pozície", icon: LayersIcon },
-  { href: "/history", label: "História", icon: ClockIcon },
   { href: "/calendar", label: "Kalendár", icon: CalendarIcon },
 ];
-const MORE = [{ href: "/strategies", label: "Stratégie" }];
+// História a Stratégie sa prezerajú, nevyžadujú dennú akciu — plán áno,
+// preto dostal hlavný slot.
+const MORE = [
+  { href: "/history", label: "História" },
+  { href: "/strategies", label: "Stratégie" },
+];
 
 export default function Nav() {
   const path = usePathname();
@@ -125,6 +130,9 @@ function ClockIcon() {
 }
 function CalendarIcon() {
   return <svg {...S}><rect x="3" y="5" width="18" height="16" rx="2" /><path d="M8 3v4M16 3v4M3 10h18" /></svg>;
+}
+function PlanIcon() {
+  return <svg {...S}><rect x="4" y="3" width="16" height="18" rx="2" /><path d="M8 8h8M8 12h8M8 16h4" /></svg>;
 }
 function DotsIcon() {
   return <svg {...S}><circle cx="5" cy="12" r="1.2" /><circle cx="12" cy="12" r="1.2" /><circle cx="19" cy="12" r="1.2" /></svg>;

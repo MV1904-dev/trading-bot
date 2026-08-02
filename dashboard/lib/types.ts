@@ -97,3 +97,49 @@ export type CalendarEvent = {
   title: string;
   impact: string;
 };
+
+export type Scenario = {
+  tag: string;
+  side: "buy" | "sell" | null;
+  kind: string;
+  trigger: string;
+  entry_lo: number | null;
+  entry_hi: number | null;
+  sl: number | null;
+  tp1: number | null;
+  tp2: number | null;
+  rr1: number | null;
+  rr2: number | null;
+  time_stop_days: number;
+  invalidation: string[];
+  note: string;
+  volume: number | null;
+  risk_eur: number | null;
+};
+
+export type DailyPlan = {
+  plan_date: string;
+  generated_at: string;
+  data_source: string | null;
+  stale_warning: string | null;
+  symbol: string;
+  price_at_build: number;
+  atr_d1_pips: number;
+  equity: number;
+  context: {
+    L1_macro: { bias: string; reason: string; partial?: boolean };
+    L2_structure: {
+      bias: string; location: string; logic: string;
+      pct_1y: number | null; pct_2y: number | null; stack: string;
+      notes: string[];
+    };
+    L3_support: { low: number; high: number; strength: number; sources: string[] }[];
+    L3_resistance: { low: number; high: number; strength: number; sources: string[] }[];
+    L4_events: { ts: string; currency: string; title: string; tier: number }[];
+    L5_news: { label?: string; text?: string }[];
+  };
+  scenarios: Scenario[];
+  status: "pending" | "approved" | "rejected" | "expired";
+  approved_at: string | null;
+  decided_note: string | null;
+};
