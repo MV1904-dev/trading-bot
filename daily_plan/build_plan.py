@@ -42,6 +42,8 @@ def main() -> int:
     ap.add_argument("--date", help="obchodný deň (default: najbližší ďalší)")
     ap.add_argument("--stdout", action="store_true",
                     help="vypíš plán, nezapisuj (na skúšku)")
+    ap.add_argument("--push", action="store_true",
+                    help="pošli plán do Supabase na schválenie")
     a = ap.parse_args()
 
     live = load_live()
@@ -90,6 +92,9 @@ def main() -> int:
 
     j, m = emit.write(plan, PLANS)
     print(f"zapísané: {j.name}, {m.name}")
+    if a.push:
+        from daily_plan.push import push
+        push(plan)
     return 0
 
 
