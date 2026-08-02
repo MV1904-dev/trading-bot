@@ -14,3 +14,7 @@ venv/
 
 # generovane data (cache historie + vysledky backtestu)
 data/
+
+# Daily Plan: denník a vygenerované plány sú prevádzkové dáta
+daily_plan/journal.db
+daily_plan/plans/
