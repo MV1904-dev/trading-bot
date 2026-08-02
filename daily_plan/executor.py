@@ -210,6 +210,17 @@ class Executor:
                     f"{row['scenario']} zatvorené ({why})")
 
     # --- jeden cyklus -----------------------------------------------------
+    @staticmethod
+    def plan_approved(plan: dict) -> bool:
+        """Bez výslovného schválenia človekom sa nevstupuje.
+
+        Toto je jediná brána medzi plánom a realitou. Plán so statusom
+        pending, rejected ani expired sa nevykonáva — a keďže status je
+        jediné, čo sa na pláne dá meniť (§5 + trigger v DB), nedá sa to
+        obísť dodatočnou úpravou scenárov.
+        """
+        return plan.get("status") == "approved"
+
     def tick(self, plan: dict, price: float, h1_closed: float | None = None
              ) -> None:
         if self.halted_reason:
@@ -227,10 +238,14 @@ class Executor:
             self.notify(f"🛑 {halt}")
             return
 
-        if "WARNING_stale_data" in plan:
-            self.j.deviation("stale_plan", plan["WARNING_stale_data"],
-                             plan["plan_date"])
+        if "WARNING_stale_data" in plan or plan.get("stale_warning"):
+            self.j.deviation("stale_plan",
+                             plan.get("WARNING_stale_data")
+                             or plan.get("stale_warning"), plan["plan_date"])
             return
+
+        if not self.plan_approved(plan):
+            return          # ticho — čakanie na schválenie nie je odchýlka
 
         for scn in plan["scenarios"]:
             if scn["tag"] == "A2" or scn["side"] is None:
