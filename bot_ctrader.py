@@ -50,6 +50,10 @@ from trading.shadow_judge import ShadowJudge
 from trading.sync_supabase import SupabaseSync
 from trading.tg import Telegram
 
+# Daily Plan executor beží v procese bota — Spotware dovolí jedno
+# app-auth spojenie. Import je lenivý až v __init__, aby prípadná chyba
+# modulu nezhodila grid pri štarte.
+
 ROOT = Path(__file__).resolve().parent
 log = logging.getLogger("bot_ctrader")
 
@@ -183,6 +187,13 @@ class CTraderBot:
         # (10 s), takže hodnotu cacheujeme a obnovujeme raz za 5 minút.
         self._last_balance: float = 0.0
         self._balance_ts: float = 0.0
+        # Daily Plan runner — schválené plány vykonáva vnútri procesu bota.
+        try:
+            from daily_plan.runtime import DailyPlanRunner
+            self.plan_runner = DailyPlanRunner(self.broker, self.sync, self.tg)
+        except Exception:  # noqa: BLE001 — Daily Plan nesmie blokovať grid
+            log.exception("Daily Plan runner sa nepodarilo spustiť")
+            self.plan_runner = None
         self._capital: dict = {}
         self._margin_cache: dict = {}
         self._margin_ts: float = 0.0
@@ -376,6 +387,11 @@ class CTraderBot:
         self._refresh_sync_snapshot()
         self._push_calendar()
         self._dump_plan_candles()
+        if self.plan_runner is not None:
+            try:
+                self.plan_runner.tick(px["mid"] if px else None)
+            except Exception:  # noqa: BLE001
+                log.exception("Daily Plan tick zlyhal")
 
     def _price(self) -> dict | None:
         q = self.broker.quote()

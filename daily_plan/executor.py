@@ -51,10 +51,18 @@ class Executor:
         self.tg = tg
         self.dry_run = dry_run
         self.halted_reason: str | None = None
+        self._pos_cache: list[dict] | None = None
 
     # --- pomocné ----------------------------------------------------------
+    def _positions(self) -> list[dict]:
+        """Pozície účtu, cachované na jeden tick — bez cache išli na
+        brokera 3+ reconcile requesty za beh."""
+        if self._pos_cache is None:
+            self._pos_cache = self.broker.positions()
+        return self._pos_cache
+
     def our_positions(self) -> list[dict]:
-        return [p for p in self.broker.positions() if is_ours(p.get("label", ""))]
+        return [p for p in self._positions() if is_ours(p.get("label", ""))]
 
     def floating(self, price: float) -> float:
         f = 0.0
@@ -127,7 +135,7 @@ class Executor:
         # tomu, aby grid vyčerpal maržu a Daily Plan to nezbadal
         need = scn["volume"] * price / 30.0    # 1:30
         acct = self.broker.account_summary()
-        used = sum(p.get("used_margin", 0.0) for p in self.broker.positions())
+        used = sum(p.get("used_margin", 0.0) for p in self._positions())
         free = acct["balance"] - used
         if free < need * NO_POSITION_MIN_FREE_MARGIN:
             self.j.deviation("margin_guard",
@@ -226,9 +234,22 @@ class Executor:
         entry = row["actual_entry"] or row["planned_entry"]
         vol = row["actual_volume"] or row["planned_volume"]
         sign = 1 if row["side"] == "buy" else -1
-        gross = sign * (price - entry) * vol
-        comm = vol * 0.90 / 10_000
-        net = gross - comm
+        # Reálne čísla zo zatváracieho dealu, ak sa dajú získať — denník
+        # rozhoduje o osude systému (§6), odhad z aktuálnej ceny by ho
+        # systematicky skresľoval pri TP/SL zavretých serverom.
+        close_price, comm, swap = price, vol * 0.90 / 10_000, 0.0
+        try:
+            deals = self.broker.closed_deals_since(int(row["ts_open"] * 1000))
+            d = deals.get(row["broker_position_id"])
+            if d:
+                close_price = d["close_price"] or price
+                comm = d["commission"]
+                swap = d["swap"]
+        except Exception:  # noqa: BLE001 — fallback na odhad
+            pass
+        gross = sign * (close_price - entry) * vol
+        net = gross - comm + swap
+        price = close_price
         r = net / (planned_risk * vol) if planned_risk and vol else None
         self.j.close_trade(row["id"], ts_close=time.time(), actual_exit=price,
                            exit_reason=why, gross_eur=gross, commission_eur=comm,
@@ -253,8 +274,9 @@ class Executor:
              ) -> None:
         if self.halted_reason:
             return
+        self._pos_cache = None            # čerstvý pohľad raz za tick
         acct = self.broker.account_summary()
-        used = sum(p.get("used_margin", 0.0) for p in self.broker.positions())
+        used = sum(p.get("used_margin", 0.0) for p in self._positions())
         halt = self.check_limits(price, acct["balance"], acct["balance"] - used)
 
         self.manage(plan, price)
