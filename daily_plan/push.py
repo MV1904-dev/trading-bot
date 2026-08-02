@@ -14,7 +14,13 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from dotenv import load_dotenv
+
 from trading.sync_supabase import SupabaseSync
+
+# build_plan beží ako samostatný proces, .env si musí načítať sám —
+# bot to robí vo svojom __init__, sem to nedosiahne.
+load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
 
 def push(plan: dict) -> bool:
