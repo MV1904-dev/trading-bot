@@ -33,6 +33,29 @@ class Bar:
         return self.ts.strftime("%Y-%m-%d")
 
 
+PLAN_CANDLES = Path(__file__).resolve().parent.parent / "data" / "plan_candles.json"
+
+
+def load_live() -> tuple[list[Bar], list[Bar], datetime] | None:
+    """H1 a D1 z dumpu, ktorý robí bot. Vracia None, ak dump neexistuje.
+
+    Bot je jediný, kto smie držať spojenie na brokera (Spotware demo
+    dovolí jedno app-auth naraz), takže plánovač si dáta neťahá sám.
+    """
+    import json
+    try:
+        raw = json.loads(PLAN_CANDLES.read_text())
+    except (OSError, ValueError):
+        return None
+
+    def conv(rows):
+        return [Bar(datetime.fromtimestamp(r["time"], timezone.utc),
+                    r["o"], r["h"], r["l"], r["c"]) for r in rows]
+
+    fetched = datetime.fromisoformat(raw["fetched_at"])
+    return conv(raw.get("h1", [])), conv(raw.get("d1", [])), fetched
+
+
 def load_h1(path: Path = H1_CSV) -> list[Bar]:
     out = []
     with path.open() as f:

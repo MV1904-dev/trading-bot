@@ -20,7 +20,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from daily_plan import emit, scenarios
 from daily_plan.context import build_events, build_macro, build_structure, build_zones
-from daily_plan.market import atr, load_h1, to_d1, to_h4, to_w1
+from daily_plan.market import (atr, load_h1, load_live, to_d1,
+                               to_h4, to_w1)
 from lab_regime.engine import Rates
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -43,11 +44,19 @@ def main() -> int:
                     help="vypíš plán, nezapisuj (na skúšku)")
     a = ap.parse_args()
 
-    h1 = load_h1()
+    live = load_live()
+    if live:
+        h1, d1_live, fetched = live
+        source = f"živé dáta z bota ({fetched:%Y-%m-%d %H:%M} UTC)"
+    else:
+        h1, d1_live, fetched = load_h1(), None, None
+        source = "statické CSV (bot ešte nedumpol sviečky)"
     if not h1:
         print("žiadne dáta", file=sys.stderr)
         return 1
-    d1, w1, h4 = to_d1(h1), to_w1(h1), to_h4(h1)
+    # D1 od brokera má správne uzávierky; z H1 skladáme len ako záložku
+    d1 = d1_live if d1_live else to_d1(h1)
+    w1, h4 = to_w1(h1), to_h4(h1)
     price = h1[-1].c
     atr_d1 = atr(d1, 14) or 0.0
     atr_avg = (sum(atr(d1[:i], 14) or 0 for i in range(-60, 0)) / 60) or atr_d1
@@ -66,6 +75,7 @@ def main() -> int:
     plan = emit.to_json(day, price, atr_d1, macro, structure, sup, res,
                         events, scns, a.equity, news=None)
 
+    plan["data_source"] = source
     staleness = (datetime.now(timezone.utc) - h1[-1].ts).days
     if staleness > 2:
         plan["WARNING_stale_data"] = (

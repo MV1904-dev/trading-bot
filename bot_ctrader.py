@@ -53,6 +53,9 @@ from trading.tg import Telegram
 ROOT = Path(__file__).resolve().parent
 log = logging.getLogger("bot_ctrader")
 
+# Sviečky pre Daily Plan builder — bot ich sype, plánovač číta.
+PLAN_CANDLES = ROOT / "data" / "plan_candles.json"
+
 
 def _iso_utc(ts: float | None) -> str | None:
     """Unix čas → ISO 8601 v UTC pre Supabase (timestamptz)."""
@@ -185,6 +188,7 @@ class CTraderBot:
         self._margin_ts: float = 0.0
         self._capital_ts: float = 0.0
         self._calendar_ts: float = 0.0
+        self._candles_ts: float = 0.0
 
     # ------------------------------------------------------------------ #
     def _guard_demo(self) -> None:
@@ -371,6 +375,7 @@ class CTraderBot:
         self._drain_sb_commands()
         self._refresh_sync_snapshot()
         self._push_calendar()
+        self._dump_plan_candles()
 
     def _price(self) -> dict | None:
         q = self.broker.quote()
@@ -999,6 +1004,39 @@ class CTraderBot:
             "free_margin": equity - used,
             "margin_level": (equity / used * 100) if used else None,
         }
+
+    def _dump_plan_candles(self, max_age_s: float = 6 * 3600) -> None:
+        """Odloží H1 a D1 sviečky na disk pre Daily Plan builder.
+
+        Spotware demo dovolí len jedno app-auth spojenie naraz, takže si
+        plánovač nemôže otvoriť vlastné. Bot ich preto raz za pol dňa
+        vysype do súboru a plánovač ich číta odtiaľ — jedno spojenie,
+        voľná väzba a pád plánovača nezhodí grid.
+        """
+        if not self.sync.enabled and not PLAN_CANDLES.parent.exists():
+            return
+        if time.time() - self._candles_ts <= max_age_s:
+            return
+        self._candles_ts = time.time()
+        try:
+            data = {
+                "fetched_at": _iso_utc(time.time()),
+                "symbol": self.cfg.SYMBOL,
+                "h1": self.broker.candles("H1", 2000),
+                "d1": self.broker.candles("D1", 500),
+            }
+        except CTraderError as exc:
+            log.warning("Dump sviečok pre Daily Plan zlyhal: %s", exc)
+            return
+        try:
+            PLAN_CANDLES.parent.mkdir(parents=True, exist_ok=True)
+            tmp = PLAN_CANDLES.with_suffix(".tmp")
+            tmp.write_text(json.dumps(data))
+            tmp.replace(PLAN_CANDLES)      # atomicky, aby plánovač nečítal polovicu
+            log.info("Sviečky pre Daily Plan uložené (H1 %d, D1 %d).",
+                     len(data["h1"]), len(data["d1"]))
+        except OSError as exc:
+            log.warning("Zápis sviečok zlyhal: %s", exc)
 
     def _push_calendar(self) -> None:
         """Nahrá high-impact udalosti do Supabase (raz za hodinu)."""
