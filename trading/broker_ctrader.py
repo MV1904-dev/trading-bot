@@ -340,6 +340,50 @@ class CTraderBroker:
                 "age_s": time.time() - self._spot_ts,
                 "tradeable": self._ready.is_set()}
 
+    # Sekundy na jeden bar podľa periódy — pre výpočet fromTimestamp.
+    _PERIOD_S = {"M5": 300, "M15": 900, "M30": 1800, "H1": 3600,
+                 "H4": 14400, "D1": 86400, "W1": 604800}
+
+    def candles(self, period: str = "H1", count: int = 600) -> list[dict]:
+        """Trendbary ľubovoľnej periódy.
+
+        cTrader vracia maximálne obmedzený počet barov na dotaz, preto sa
+        dlhšie histórie ťahajú po oknách. Daily Plan potrebuje ~500 D1
+        barov na SMA200 a percentily, čo je jedným dotazom neprejde.
+        """
+        step = self._PERIOD_S.get(period.upper())
+        if step is None:
+            raise CTraderError(f"neznáma perióda {period}")
+        want = getattr(ProtoOATrendbarPeriod, period.upper())
+        now_ms = int(time.time() * 1000)
+        chunk = 3000                       # bezpečne pod limitom brokera
+        got: dict[int, dict] = {}
+        end = now_ms
+        while len(got) < count:
+            req = ProtoOAGetTrendbarsReq()
+            req.ctidTraderAccountId = self.account_id
+            req.symbolId = self.symbol_id
+            req.period = want
+            req.toTimestamp = end
+            req.fromTimestamp = end - chunk * step * 1000
+            try:
+                res = self._send(req, timeout=25)
+            except CTraderError as exc:
+                log.warning("Trendbary %s zlyhali: %s", period, exc)
+                break
+            if not res.trendbar:
+                break
+            for tb in res.trendbar:
+                low = tb.low * PRICE_SCALE
+                ts = tb.utcTimestampInMinutes * 60
+                got[ts] = {"time": ts,
+                           "o": low + tb.deltaOpen * PRICE_SCALE,
+                           "h": low + tb.deltaHigh * PRICE_SCALE,
+                           "l": low,
+                           "c": low + tb.deltaClose * PRICE_SCALE}
+            end = req.fromTimestamp - 1
+        return [got[t] for t in sorted(got)][-count:]
+
     def candles_m5(self, count: int = 600) -> list[dict]:
         req = ProtoOAGetTrendbarsReq()
         req.ctidTraderAccountId = self.account_id
