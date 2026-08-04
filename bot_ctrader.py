@@ -1009,12 +1009,13 @@ class CTraderBot:
             return {"used_margin": used, "free_margin": equity - used,
                     "margin_level": (equity / used * 100) if used else None}
         try:
-            used = sum(p.get("used_margin", 0.0) for p in self.broker.positions())
+            plist = self.broker.positions()
+            used = sum(p.get("used_margin", 0.0) for p in plist)
         except CTraderError as exc:
             log.debug("Maržu sa nepodarilo zistiť: %s", exc)
             return self._margin_cache or {}
         self._margin_ts = time.time()
-        self._margin_cache = {"used_margin": used}
+        self._margin_cache = {"used_margin": used, "positions": plist}
         return {
             "used_margin": used,
             "free_margin": equity - used,
@@ -1092,6 +1093,11 @@ class CTraderBot:
             q = self.broker.quote()
             mid = q["mid"] if q else None
             rows = self.db.open_trades()
+            # Broker hlási naakumulovaný swap pre otvorené pozície priebežne
+            # (reconcile); grid DB ho má až pri zavretí. Bez tohto boli
+            # náklady držania v dashboarde nulové.
+            swap_map = {bp["position_id"]: bp.get("swap", 0.0)
+                        for bp in (self._margin_cache.get("positions") or [])}
             positions, floating = [], 0.0
             for r in rows:
                 ctx = json.loads(r["context"] or "{}")
@@ -1112,7 +1118,8 @@ class CTraderBot:
                     "entry_price": r["entry_price"],
                     "tp_price": r["tp_price"],
                     "opened_at": _iso_utc(r["ts_open"]),
-                    "funding_usd": r["funding_usd"],
+                    "funding_usd": swap_map.get(r["entry_order_id"],
+                                                r["funding_usd"]),
                     "commission_usd": r["commission_usd"],
                     "pnl_float": pnl,
                     "spread_at_entry": spread,

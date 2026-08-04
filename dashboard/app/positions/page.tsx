@@ -24,7 +24,7 @@ export default function PositionsPage() {
             <div className={`tile-value ${pnlClass(floating)}`}>{signed(floating)}</div>
           </div>
           <div className="tile">
-            <div className="tile-label">Funding</div>
+            <div className="tile-label">Swap (držanie)</div>
             <div className={`tile-value ${pnlClass(funding)}`}>{signed(funding)}</div>
           </div>
           <div className="tile">
@@ -37,7 +37,7 @@ export default function PositionsPage() {
       <Section
         title="Otvorené"
         meta={`${positions.length}`}
-        info="Klepnutím na riadok sa rozbalí objem, TP, naakumulovaný funding a tlačidlo na zatvorenie. Zatvorenie ide cez frontu príkazov — bot ho vyzdvihne do 5 sekúnd, dashboard k brokerovi prístup nemá."
+        info="Klepnutím na riadok sa rozbalí objem, TP, swap a tlačidlo na zatvorenie. Swap je naakumulovaný náklad za držanie pozície cez noc — účtuje sa pri dennom rollovere, v stredu trojnásobne; hodnota ide priamo z brokera. Zatvorenie ide cez frontu príkazov — bot ho vyzdvihne do 5 sekúnd, dashboard k brokerovi prístup nemá."
       >
         <PositionList positions={positions} />
       </Section>

@@ -64,7 +64,7 @@ export default function PositionList({
           <Detail label="Objem" value={money(p.qty, 0)} />
           <Detail label="Take profit" value={price(p.tp_price)} />
           <Detail
-            label="Funding"
+            label="Swap za držanie"
             value={signed(p.funding_usd)}
             tone={pnlClass(p.funding_usd)}
           />
