@@ -1,7 +1,6 @@
 "use client";
 
 import Hero from "@/components/Hero";
-import PnlCalendar from "@/components/PnlCalendar";
 import PositionList from "@/components/PositionList";
 import DailyPnlTable from "@/components/DailyPnlTable";
 import { Section } from "@/components/ui";
@@ -71,12 +70,9 @@ export default function Overview() {
 
       <Section
         title="Denný P/L"
-        info="Sýtosť bunky zodpovedá veľkosti P/L, prázdna bunka je deň bez zavretého obchodu. Riadok dňa sa dá rozkliknúť na jednotlivé zrealizované obchody."
+        info="Len dni so zavretým obchodom, podľa UTC dátumu zavretia. Riadok dňa sa dá rozkliknúť na jednotlivé zrealizované obchody; kumulatív beží od najstaršieho zobrazeného dňa."
       >
-        <PnlCalendar daily={daily} />
-        <div className="mt-3">
-          <DailyPnlTable daily={daily} trades={trades} />
-        </div>
+        <DailyPnlTable daily={daily} trades={trades} />
       </Section>
     </main>
   );

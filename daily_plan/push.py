@@ -29,6 +29,13 @@ def push(plan: dict) -> bool:
         print("Supabase nie je nastavená (SUPABASE_URL/SERVICE_KEY)", file=sys.stderr)
         return False
 
+    # Staré nerozhodnuté plány prepadnú — nech v dashboarde nevisí
+    # včerajšie "čaká na schválenie". Schválené ostávajú ako záznam
+    # rozhodnutia; ich scenáre aj tak platia len pre svoj deň.
+    sb._req("PATCH", f"daily_plans?plan_date=lt.{plan['plan_date']}"
+                     f"&status=eq.pending", {"status": "expired"},
+            prefer="return=minimal")
+
     existing = sb._req("GET", f"daily_plans?plan_date=eq.{plan['plan_date']}"
                               f"&select=status")
     if existing and existing[0]["status"] != "pending":
