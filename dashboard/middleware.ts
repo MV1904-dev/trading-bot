@@ -37,6 +37,19 @@ export async function middleware(request: NextRequest) {
   const path = request.nextUrl.pathname;
   const isPublic = PUBLIC.some((p) => path.startsWith(p));
 
+  // E-mailový odkaz často pristane na koreni, nie na /auth/callback —
+  // Supabase použije Site URL vždy, keď emailRedirectTo nie je medzi
+  // povolenými Redirect URLs. Bez tejto vetvy by ho redirect na /login
+  // zahodil aj s tokenom a používateľ by videl znova prihlasovací formulár.
+  const hasAuthToken =
+    request.nextUrl.searchParams.has("code") ||
+    request.nextUrl.searchParams.has("token_hash");
+  if (!user && hasAuthToken && !path.startsWith("/auth")) {
+    const url = request.nextUrl.clone();
+    url.pathname = "/auth/callback";
+    return NextResponse.redirect(url);
+  }
+
   if (!user && !isPublic) {
     const url = request.nextUrl.clone();
     url.pathname = "/login";

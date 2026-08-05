@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { createClient, OWNER_EMAIL } from "@/lib/supabase";
 
 export default function LoginPage() {
@@ -8,6 +8,41 @@ export default function LoginPage() {
   const [sent, setSent] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+
+  // Odkaz môže session doručiť aj vo fragmente (#access_token), ktorý server
+  // nikdy nevidí — a zlyhanie z callbacku príde v ?error=. Bez tohto oboje
+  // skončilo tichým návratom na formulár.
+  useEffect(() => {
+    const reason = new URLSearchParams(window.location.search).get("error");
+    if (reason) {
+      setErr(
+        reason === "chyba_odkazu"
+          ? "Odkaz neobsahoval prihlasovací token."
+          : `Odkaz sa nepodarilo použiť: ${reason}`,
+      );
+    }
+
+    const hash = new URLSearchParams(window.location.hash.slice(1));
+    const access_token = hash.get("access_token");
+    const refresh_token = hash.get("refresh_token");
+    if (hash.get("error_description")) {
+      setErr(hash.get("error_description"));
+      return;
+    }
+    if (!access_token || !refresh_token) return;
+
+    setBusy(true);
+    createClient()
+      .auth.setSession({ access_token, refresh_token })
+      .then(({ error }) => {
+        if (error) {
+          setErr(error.message);
+          setBusy(false);
+          return;
+        }
+        window.location.replace("/");
+      });
+  }, []);
 
   async function send(e: React.FormEvent) {
     e.preventDefault();
