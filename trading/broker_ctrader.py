@@ -44,6 +44,7 @@ log = logging.getLogger(__name__)
 
 PRICE_SCALE = 1e-5
 VOLUME_SCALE = 100          # jednotky -> volume v požiadavke
+VOLUME_STEP_UNITS = 1000    # broker berie len násobky 0,01 lotu
 
 _reactor_thread: Optional[threading.Thread] = None
 
@@ -415,6 +416,12 @@ class CTraderBroker:
         cTrader chce vzdialenosti, nie absolútne ceny → prepočet z aktuálnej
         kotácie. Vráti {'position_id', 'price', 'order_id'}.
         """
+        # Neplatný objem broker odmietne až po odoslaní (TRADING_BAD_VOLUME) a
+        # volajúci to zistí ako výnimku z pol requestu — radšej hneď a jasne.
+        if abs(units) < VOLUME_STEP_UNITS or abs(units) % VOLUME_STEP_UNITS:
+            raise CTraderError(
+                f"Objem {abs(units):.0f} nie je násobkom kroku "
+                f"{VOLUME_STEP_UNITS} jednotiek — broker by ho odmietol.")
         q = self.quote()
         if q is None:
             raise CTraderError("Bez kotácie neviem vypočítať relatívny TP/SL.")

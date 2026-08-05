@@ -27,6 +27,7 @@ TP1_MIN_RR = 1.2
 TP2_MIN_RR = 2.0
 RISK_PCT = 0.005
 LEV_CAP = 5.0
+VOLUME_STEP = 1000.0        # broker berie len násobky 0,01 lotu (§broker)
 
 
 @dataclass
@@ -186,6 +187,16 @@ def no_trade_reasons(events: list[Event], atr_d1: float, atr_avg: float,
     return out
 
 
+def quantize_volume(units: float) -> float:
+    """Objem zaokrúhlený NADOL na krok brokera.
+
+    Nadol zámerne: nahor by objem prekročil riziko 0,5 %. Bez tohto kroku
+    vychádzali z rizikového výpočtu objemy ako 5803, ktoré broker odmieta
+    (TRADING_BAD_VOLUME) — plán potom nešlo vôbec vykonať.
+    """
+    return float(int(units // VOLUME_STEP) * int(VOLUME_STEP))
+
+
 def size(scn: Scenario, equity: float, price: float) -> Scenario:
     """Objem z rizika 0,5 % a vzdialenosti entry→SL, so stropom páky."""
     if not scn.valid or scn.sl is None:
@@ -197,11 +208,23 @@ def size(scn: Scenario, equity: float, price: float) -> Scenario:
     risk_eur = equity * RISK_PCT
     units = risk_eur / risk_price
     max_units = equity * LEV_CAP
-    scn.volume = min(units, max_units)
+    raw = min(units, max_units)
+    scn.volume = quantize_volume(raw)
+    if scn.volume < VOLUME_STEP:
+        # Objem 0 scenár fakticky vyradí: executor ho odmietne (volume_guard)
+        # a emit ho vykreslí ako „—". `valid` je property, nedá sa nastaviť.
+        scn.risk_eur = 0.0
+        scn.note += (f" | riziko {risk_eur:.2f} € pri SL {risk_price/PIP:.0f} p "
+                     f"vychádza pod minimálny objem {VOLUME_STEP:.0f} — "
+                     f"scenár sa nedá zobchodovať")
+        return scn
     scn.risk_eur = scn.volume * risk_price
     if units > max_units:
         scn.note += (f" | objem orezaný stropom páky {LEV_CAP}× "
                      f"(riziko klesá na {scn.risk_eur:.2f} €)")
+    if raw - scn.volume >= 1:
+        scn.note += (f" | objem {raw:.0f} → {scn.volume:.0f} "
+                     f"(krok brokera {VOLUME_STEP:.0f})")
     return scn
 
 

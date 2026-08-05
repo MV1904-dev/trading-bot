@@ -23,6 +23,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from daily_plan.journal import Journal
+from daily_plan.scenarios import VOLUME_STEP, quantize_volume
 
 log = logging.getLogger("daily_plan.executor")
 
@@ -149,9 +150,28 @@ class Executor:
         if not self._trigger_hit(scn, price, h1_closed):
             return False
 
+        # Objem na krok brokera. Plány schválené pred opravou v scenarios.py
+        # nesú spojité číslo z rizikového výpočtu (5803), ktoré broker
+        # odmieta — zaokrúhlenie nadol je odchýlka, nie zmena plánu.
+        volume = quantize_volume(scn["volume"])
+        if volume < VOLUME_STEP:
+            if self._first_today(pd_, f"volume_guard|{scn['tag']}"):
+                self.j.deviation("volume_guard",
+                                 f"objem {scn['volume']:.0f} je pod minimom "
+                                 f"{VOLUME_STEP:.0f} — vstup {scn['tag']} "
+                                 f"vynechaný", pd_)
+                self.notify(f"vstup {scn['tag']} vynechaný — objem pod "
+                            f"minimom brokera ({VOLUME_STEP:.0f})")
+            return False
+        if volume != scn["volume"] and self._first_today(
+                pd_, f"volume_round|{scn['tag']}"):
+            self.j.deviation("volume_round",
+                             f"objem {scn['volume']:.0f} → {volume:.0f} "
+                             f"(krok brokera {VOLUME_STEP:.0f})", pd_)
+
         # margin guard §4 — na zdieľanom účte je to jediná ochrana proti
         # tomu, aby grid vyčerpal maržu a Daily Plan to nezbadal
-        need = scn["volume"] * price / 30.0    # 1:30
+        need = volume * price / 30.0           # 1:30
         acct = self.broker.account_summary()
         used = sum(p.get("used_margin", 0.0) for p in self._positions())
         free = acct["balance"] - used
@@ -164,10 +184,10 @@ class Executor:
                             f"({free:.0f} € proti potrebným {need*3:.0f} €)")
             return False
 
-        units = scn["volume"] if scn["side"] == "buy" else -scn["volume"]
+        units = volume if scn["side"] == "buy" else -volume
         if self.dry_run:
             self.notify(f"[dry-run] vstup {scn['tag']} {scn['side']} "
-                        f"{scn['volume']:.0f} @ {price:.5f}, SL {scn['sl']:.5f}")
+                        f"{volume:.0f} @ {price:.5f}, SL {scn['sl']:.5f}")
             return True
 
         res = self.broker.market_order_with_tp(
@@ -183,9 +203,9 @@ class Executor:
             planned_entry=planned, planned_sl=scn["sl"],
             planned_tp1=scn["tp1"], planned_tp2=scn["tp2"],
             planned_volume=scn["volume"],
-            ts_open=time.time(), actual_entry=entry, actual_volume=scn["volume"],
+            ts_open=time.time(), actual_entry=entry, actual_volume=volume,
             slippage_entry_pips=abs(entry - planned) / PIP)
-        self.notify(f"{scn['tag']} {scn['side'].upper()} {scn['volume']:.0f} "
+        self.notify(f"{scn['tag']} {scn['side'].upper()} {volume:.0f} "
                     f"@ {entry:.5f} | SL {scn['sl']:.5f} TP1 {scn['tp1']:.5f} "
                     f"(sklz {abs(entry-planned)/PIP:.1f} p)")
         return True
