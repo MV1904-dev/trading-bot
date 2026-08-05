@@ -52,7 +52,9 @@ export default function LoginPage() {
     const { error } = await supabase.auth.signInWithOtp({
       email,
       options: {
-        emailRedirectTo: `${window.location.origin}/auth/callback`,
+        // Tokeny prídu vo fragmente (#access_token) — ten vidí len prehliadač,
+        // takže cieľ je /login, kde ich spracuje fragment handler nižšie.
+        emailRedirectTo: `${window.location.origin}/login`,
       },
     });
     setBusy(false);
@@ -70,8 +72,8 @@ export default function LoginPage() {
 
         {sent ? (
           <p className="mt-6 rounded-lg bg-emerald-600/10 p-3 text-sm text-pos">
-            Odkaz je na ceste na <strong>{email}</strong>. Otvor ho na tomto
-            zariadení.
+            Odkaz je na ceste na <strong>{email}</strong>. Otvor{" "}
+            <strong>najnovší</strong> e-mail — staršie odkazy už neplatia.
           </p>
         ) : (
           <form onSubmit={send} className="mt-6 space-y-3">

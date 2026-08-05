@@ -11,6 +11,14 @@ export function createClient() {
   return createBrowserClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+    {
+      // Implicit namiesto PKCE: e-mailový odkaz sa overí na serveri Supabase
+      // a tokeny prídu vo fragmente. PKCE viaže odkaz na prehliadač, ktorý si
+      // ho vypýtal (verifier v cookie) — odkaz otvorený cez Gmail tak končil
+      // na "PKCE code verifier not found", a každé nové odoslanie zneplatnilo
+      // verifier predchádzajúceho odkazu.
+      auth: { flowType: "implicit" },
+    },
   );
 }
 
