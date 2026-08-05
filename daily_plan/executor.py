@@ -52,6 +52,7 @@ class Executor:
         self.dry_run = dry_run
         self.halted_reason: str | None = None
         self._pos_cache: list[dict] | None = None
+        self._notified: dict[str, set[str]] = {}   # plan_date → ohlásené kľúče
 
     # --- pomocné ----------------------------------------------------------
     def _positions(self) -> list[dict]:
@@ -75,6 +76,22 @@ class Executor:
         log.info(msg)
         if self.tg:
             self.tg.send(f"[DAILY PLAN] {msg}")
+
+    def _first_today(self, plan_date: str, key: str) -> bool:
+        """True len pri prvom výskyte kľúča v rámci dňa.
+
+        Blokujúce stavy (T2 okno, margin guard) trvajú desiatky minút, ale
+        tick beží každých 30 s — bez tejto poistky by jedna T2 udalosť
+        poslala ~120 identických správ a rovnaký počet riadkov do denníka.
+        Stav je v pamäti: po reštarte sa každý stav ohlási znova raz, čo je
+        žiaduce (nový beh = nový kontext).
+        """
+        seen = self._notified.setdefault(plan_date, set())
+        if key in seen:
+            return False
+        seen.add(key)
+        self._notified = {plan_date: seen}   # staršie dni netreba držať
+        return True
 
     # --- kill switche (§4) ------------------------------------------------
     def check_limits(self, price: float, balance: float,
@@ -118,10 +135,11 @@ class Executor:
         if blocked:
             if not self._trigger_hit(scn, price, h1_closed):
                 return False
-            self.j.deviation("t2_guard",
-                             f"trigger {scn['tag']} padol v T2 okne ({blocked}) "
-                             f"— vstup vynechaný", pd_)
-            self.notify(f"vstup {scn['tag']} vynechaný — T2 okno ({blocked})")
+            if self._first_today(pd_, f"t2_guard|{scn['tag']}|{blocked}"):
+                self.j.deviation("t2_guard",
+                                 f"trigger {scn['tag']} padol v T2 okne ({blocked}) "
+                                 f"— vstup vynechaný", pd_)
+                self.notify(f"vstup {scn['tag']} vynechaný — T2 okno ({blocked})")
             return False
 
         if self.j.traded_today(pd_) >= 1:
@@ -138,11 +156,12 @@ class Executor:
         used = sum(p.get("used_margin", 0.0) for p in self._positions())
         free = acct["balance"] - used
         if free < need * NO_POSITION_MIN_FREE_MARGIN:
-            self.j.deviation("margin_guard",
-                             f"voľná marža {free:.2f} € < {need*3:.2f} € "
-                             f"(3× požiadavka) — vstup {scn['tag']} vynechaný", pd_)
-            self.notify(f"vstup {scn['tag']} vynechaný — málo voľnej marže "
-                        f"({free:.0f} € proti potrebným {need*3:.0f} €)")
+            if self._first_today(pd_, f"margin_guard|{scn['tag']}"):
+                self.j.deviation("margin_guard",
+                                 f"voľná marža {free:.2f} € < {need*3:.2f} € "
+                                 f"(3× požiadavka) — vstup {scn['tag']} vynechaný", pd_)
+                self.notify(f"vstup {scn['tag']} vynechaný — málo voľnej marže "
+                            f"({free:.0f} € proti potrebným {need*3:.0f} €)")
             return False
 
         units = scn["volume"] if scn["side"] == "buy" else -scn["volume"]
