@@ -163,6 +163,7 @@ class CTraderBot:
         self._atr: dict[int, float | None] = {}
         self._atr_prev: dict[int, float | None] = {}
         self.paused_until = 0.0
+        self._manual_entry: str | None = None   # /vstup — vykoná hlavný tick
         self.auto_paused = False
         self.last_md_ts = time.time()
         self._gap_alarmed = False
@@ -378,6 +379,7 @@ class CTraderBot:
             self.judge.on_price(px["mid"])
             self._update_failsafe_daily(px["mid"])
             self._aggregate_bar(px["mid"])
+            self._process_manual_entry(px["mid"])
         self._poll_closes()
         self._enforce_time_stops()
         self._morning_briefing(px["mid"] if px else None)
@@ -865,6 +867,31 @@ class CTraderBot:
                                  self.db.cycles_on_day(ydate))
         self._snap_day = day
 
+    def _process_manual_entry(self, mid: float) -> None:
+        """Vykoná /vstup z hlavného vlákna. TG polling beží vo vlastnom
+        vlákne a broker/DB nie sú thread-safe, preto príkaz len nastaví
+        flag a vstup ide štandardnou cestou _execute (judge, blackout,
+        pauza aj margin platia rovnako ako pri vstupe gridu)."""
+        if not self._manual_entry:
+            return
+        side = self._manual_entry
+        self._manual_entry = None
+        grid = next((s for s in self.strategies
+                     if s.enabled and s.id.startswith("Grid25")), None)
+        if grid is None:
+            self.tg.send("Manuálny vstup: grid stratégia nie je aktívna.")
+            return
+        tp = mid * (1 - grid.cfg.tp_pct) if side == "short" \
+            else mid * (1 + grid.cfg.tp_pct)
+        sig = Signal(strategy_id=grid.id, side=side, qty=grid.cfg.qty,
+                     tp_price=round(tp, 5),
+                     reason="manuálny kotevný vstup (/vstup)",
+                     context={"manual": True})
+        bar = Bar(ts=time.time(), open=mid, high=mid, low=mid, close=mid)
+        # on_trade_opened po fillu prekotví grid na vstupnú cenu, takže
+        # ďalšie úrovne sa počítajú od reálneho vstupu, nie od štartu bota
+        self._execute(sig, bar, self._atr.get(grid.timeframe_s))
+
     def _handle_command(self, cmd: str, args: str) -> None:
         if cmd == "/stav":
             try:
@@ -902,6 +929,15 @@ class CTraderBot:
         elif cmd == "/start":
             self.paused_until = 0.0
             self.tg.send("▶️ Vstupy povolené.")
+        elif cmd == "/vstup":
+            a = args.strip().lower()
+            if a not in ("short", "long"):
+                self.tg.send("Použi /vstup short alebo /vstup long.")
+                return
+            self._manual_entry = a
+            self.tg.send(f"🫡 Manuálny vstup {a.upper()} naplánovaný — "
+                         f"vykoná sa do {self.cfg.TICK_SECONDS:.0f} s "
+                         f"štandardnou cestou (blackout/pauza/marža platia).")
         elif cmd in ("/help", "/pomoc"):
             self.tg.send(self._commands_help())
         else:
@@ -1325,6 +1361,7 @@ class CTraderBot:
                 "/pozicie — zoznam otvorených pozícií s TP\n"
                 "/pauza [30m|2h] — pozastaví vstupy (default 60 min)\n"
                 "/start — zruší pauzu\n"
+                "/vstup short|long — okamžitý grid vstup (prekotví grid)\n"
                 "/help — tento zoznam")
 
 
