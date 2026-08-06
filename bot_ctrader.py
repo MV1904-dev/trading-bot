@@ -217,14 +217,15 @@ class CTraderBot:
             print(f"CHYBA: cTrader pripojenie zlyhalo: {exc}", file=sys.stderr)
             return 1
         acct = self.broker.account_summary()
-        log.info("cTrader demo pripojený, balance %.2f.", acct["balance"])
+        log.info("cTrader %s pripojený, balance %.2f.",
+                 "demo" if self.cfg.DEMO else "LIVE", acct["balance"])
         self._bootstrap_atr()
         self._load_daily_extremes()
         self._restore_state()
         self.macro.refresh()
         restarted = os.getenv("BOT_RESTARTED") == "1"
         self.tg.send(f"🤖 <b>cTrader bot {'reštartovaný' if restarted else 'spustený'}</b> "
-                     f"(demo, {self.cfg.SYMBOL})\n"
+                     f"({'demo' if self.cfg.DEMO else '🔴 LIVE'}, {self.cfg.SYMBOL})\n"
                      + "\n".join(s.status_line() for s in self.strategies) + "\n"
                      f"Balance: {acct['balance']:,.2f}\n"
                      + self._config_line())
@@ -1332,6 +1333,18 @@ def main() -> int:
     ap.add_argument("--run-minutes", type=float, default=0.0)
     args = ap.parse_args()
     cfg = CTraderBotConfig()
+    # Live sa zapína výhradne cez .env (CTRADER_DEMO=0), nie úpravou kódu —
+    # a aj tak len spolu s CTRADER_CONFIRM_LIVE (guard v _guard_demo).
+    if os.getenv("CTRADER_DEMO", "1") == "0":
+        cfg.DEMO = False
+        # 500 € účet = 1/10 demo účtu → QTY 1 000 (zhodou okolností broker
+        # minimum 0,01 lotu); geometria gridu ostáva identická s demo behom.
+        cfg.QTY = float(os.getenv("CTRADER_QTY", "1000"))
+        cfg.TG_PREFIX = "[CTRADER-LIVE] "
+        # Čistý stav: demo DB nesie virtuálnu equity, kotvy a históriu
+        # obchodov z demo cien — miešanie by rozbilo shadow report aj P/L.
+        cfg.DB_PATH = ROOT / "data" / "bot_ctrader_live.db"
+        cfg.LOG_PATH = ROOT / "data" / "bot_ctrader_live.log"
     cfg.LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
     logging.basicConfig(
         level=logging.INFO,
