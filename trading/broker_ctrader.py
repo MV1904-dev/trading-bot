@@ -214,11 +214,32 @@ class CTraderBroker:
         d.addCallback(self._on_app_auth)
         d.addErrback(self._auth_err)
 
-    def _on_app_auth(self, _msg) -> None:
+    @staticmethod
+    def _error_of(msg):
+        """SDK deferred volá success-callback aj pri ProtoOAErrorRes — odpoveď
+        treba skontrolovať, inak sa chyba auth tvári ako úspech a spadne až
+        prvý account-scoped request ('Trading account is not authorized')."""
+        try:
+            payload = Protobuf.extract(msg)
+        except Exception:  # noqa: BLE001
+            return None
+        if type(payload).__name__ == "ProtoOAErrorRes":
+            return payload
+        return None
+
+    def _on_app_auth(self, msg) -> None:
+        err = self._error_of(msg)
+        if err is not None:
+            log.error("App auth zamietnutý: %s %s", err.errorCode,
+                      getattr(err, "description", ""))
+            return                     # _ready ostáva dole → connect() to rieši
         self._app_authed.set()
         if not self.account_id:
             self._ready.set()          # len app auth (výpis účtov)
             return
+        self._send_account_auth()
+
+    def _send_account_auth(self) -> None:
         req = ProtoOAAccountAuthReq()
         req.ctidTraderAccountId = self.account_id
         req.accessToken = self.access_token
@@ -226,7 +247,17 @@ class CTraderBroker:
         d.addCallback(self._on_account_auth)
         d.addErrback(self._auth_err)
 
-    def _on_account_auth(self, _msg) -> None:
+    def _on_account_auth(self, msg) -> None:
+        err = self._error_of(msg)
+        if err is not None:
+            # CANT_ROUTE_REQUEST je prechodný stav Spotware (čerstvý účet,
+            # engine sa práve presúva) — retry po pauze; strop drží timeout
+            # v connect().
+            log.warning("Account auth zamietnutý: %s %s — retry o 3 s",
+                        err.errorCode, getattr(err, "description", ""))
+            from twisted.internet import reactor
+            reactor.callLater(3.0, self._send_account_auth)
+            return
         self._ready.set()
         # po re-connecte treba obnoviť odber spotov (symbol už poznáme)
         if self.symbol_id is not None:
