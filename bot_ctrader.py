@@ -1332,6 +1332,10 @@ def main() -> int:
     ap = argparse.ArgumentParser(description="cTrader demo grid bot")
     ap.add_argument("--run-minutes", type=float, default=0.0)
     args = ap.parse_args()
+    # .env treba načítať PRED čítaním CTRADER_DEMO — inak sa prepínač
+    # ticho ignoruje a bot sa hlási s live účtom na demo host, čo Spotware
+    # odmieta ako CANT_ROUTE_REQUEST (stalo sa pri prvom live nasadení).
+    load_dotenv()
     cfg = CTraderBotConfig()
     # Live sa zapína výhradne cez .env (CTRADER_DEMO=0), nie úpravou kódu —
     # a aj tak len spolu s CTRADER_CONFIRM_LIVE (guard v _guard_demo).
