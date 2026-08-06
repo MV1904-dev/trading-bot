@@ -1,6 +1,7 @@
 "use client";
 
 import { useLive } from "@/lib/useLive";
+import { useEnv } from "@/lib/env";
 import { dateTime } from "@/lib/format";
 import { Empty, Section } from "@/components/ui";
 import type { CalendarEvent, DailyCycle } from "@/lib/types";
@@ -8,11 +9,13 @@ import type { CalendarEvent, DailyCycle } from "@/lib/types";
 const BLACKOUT_MIN = 30;
 
 export default function CalendarPage() {
+  const { env } = useEnv();
   const { rows: events } = useLive<CalendarEvent>("calendar_events", (q) =>
     q.select("*").order("ts", { ascending: true }).limit(500),
   );
   const { rows: daily } = useLive<DailyCycle>("daily_cycles", (q) =>
-    q.select("*").order("day", { ascending: false }).limit(120),
+    q.select("*").eq("env", env).order("day", { ascending: false }).limit(120),
+    [env],
   );
 
   const now = Date.now();

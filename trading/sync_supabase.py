@@ -44,10 +44,14 @@ def _iso(ts: float) -> str:
 
 
 class SupabaseSync:
-    def __init__(self, url: str = "", key: str = "", bot_id: str = "ctrader"):
+    def __init__(self, url: str = "", key: str = "", bot_id: str = "ctrader",
+                 env: str = "demo"):
         self.url = (url or os.getenv("SUPABASE_URL", "")).rstrip("/")
         self.key = key or os.getenv("SUPABASE_SERVICE_KEY", "")
         self.bot_id = bot_id
+        # 'demo' | 'live' — rozmer v zrkadlových tabuľkách; id dealov sú
+        # per-server, bez env by sa demo a live história ticho pomiešali.
+        self.env = env
         self.enabled = bool(self.url and self.key)
         self._stop = threading.Event()
         self._wake = threading.Event()
@@ -162,33 +166,37 @@ class SupabaseSync:
             return
         state = dict(snap.get("state") or {})
         state["id"] = self.bot_id
+        state["env"] = self.env
         state["heartbeat_at"] = _iso(time.time())
         state["updated_at"] = _iso(time.time())
-        self._upsert("bot_state", [state], on_conflict="id")
+        self._upsert("bot_state", [state], on_conflict="env,id")
 
-        positions = snap.get("positions") or []
-        self._upsert("positions", positions, on_conflict="id")
+        positions = [dict(p, env=self.env) for p in snap.get("positions") or []]
+        self._upsert("positions", positions, on_conflict="env,id")
         # Zavreté pozície musia zo zrkadla zmiznúť, inak by v dashboarde
-        # viseli navždy. Mažeme všetko, čo nie je v aktuálnom zozname.
+        # viseli navždy. Mažeme všetko, čo nie je v aktuálnom zozname —
+        # ale len vo vlastnom env, inak by live bot zmazal demo históriu.
         ids = [str(p["id"]) for p in positions]
         if ids:
-            self._req("DELETE", f"positions?id=not.in.({','.join(ids)})")
+            self._req("DELETE",
+                      f"positions?env=eq.{self.env}&id=not.in.({','.join(ids)})")
         else:
-            self._req("DELETE", "positions?id=gte.0")
+            self._req("DELETE", f"positions?env=eq.{self.env}&id=gte.0")
 
-        if self._upsert("trades", snap.get("trades") or [],
-                        on_conflict="id"):
+        trades = [dict(t, env=self.env) for t in snap.get("trades") or []]
+        if self._upsert("trades", trades, on_conflict="env,id"):
             self.confirmed_trades_until = max(
                 self.confirmed_trades_until,
                 float(snap.get("trades_until") or 0.0))
-        self._upsert("daily_cycles", snap.get("daily") or [],
-                     on_conflict="day,strategy")
+        daily = [dict(d, env=self.env) for d in snap.get("daily") or []]
+        self._upsert("daily_cycles", daily, on_conflict="env,day,strategy")
 
         acct = snap.get("account") or {}
         now = time.time()
         if acct and now - self._last_equity >= EQUITY_EVERY_S:
             self._last_equity = now
-            self._req("POST", "equity_snapshots?on_conflict=ts", [{
+            self._req("POST", "equity_snapshots?on_conflict=env,ts", [{
+                "env": self.env,
                 "ts": _iso(now),
                 "balance": acct.get("balance", 0.0),
                 "equity": acct.get("equity", 0.0),

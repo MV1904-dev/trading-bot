@@ -5,21 +5,27 @@ import PositionList from "@/components/PositionList";
 import DailyPnlTable from "@/components/DailyPnlTable";
 import { Section } from "@/components/ui";
 import { useLive } from "@/lib/useLive";
+import { useEnv } from "@/lib/env";
 import { money, signed } from "@/lib/format";
 import type { BotState, DailyCycle, Position, Trade } from "@/lib/types";
 
 export default function Overview() {
+  const { env } = useEnv();
   const { rows: states } = useLive<BotState>("bot_state", (q) =>
-    q.select("*").limit(1),
+    q.select("*").eq("env", env).limit(1),
+    [env],
   );
   const { rows: positions } = useLive<Position>("positions", (q) =>
-    q.select("*").order("opened_at", { ascending: false }),
+    q.select("*").eq("env", env).order("opened_at", { ascending: false }),
+    [env],
   );
   const { rows: daily } = useLive<DailyCycle>("daily_cycles", (q) =>
-    q.select("*").order("day", { ascending: false }).limit(400),
+    q.select("*").eq("env", env).order("day", { ascending: false }).limit(400),
+    [env],
   );
   const { rows: trades } = useLive<Trade>("trades", (q) =>
-    q.select("*").order("closed_at", { ascending: false }).limit(500),
+    q.select("*").eq("env", env).order("closed_at", { ascending: false }).limit(500),
+    [env],
   );
 
   const state = states[0] ?? null;

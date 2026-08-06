@@ -6,6 +6,7 @@ import CostSplit, {
   type SideCosts,
 } from "@/components/CostSplit";
 import { useLive } from "@/lib/useLive";
+import { useEnv } from "@/lib/env";
 import { money, pnlClass, signed } from "@/lib/format";
 import { Empty, Section } from "@/components/ui";
 import type { BotState, DailyCycle, Position, Trade } from "@/lib/types";
@@ -21,17 +22,22 @@ type Row = {
 };
 
 export default function StrategiesPage() {
+  const { env } = useEnv();
   const { rows: states } = useLive<BotState>("bot_state", (q) =>
-    q.select("*").limit(1),
+    q.select("*").eq("env", env).limit(1),
+    [env],
   );
   const { rows: trades } = useLive<Trade>("trades", (q) =>
-    q.select("*").limit(5000),
+    q.select("*").eq("env", env).limit(5000),
+    [env],
   );
   const { rows: positions } = useLive<Position>("positions", (q) =>
-    q.select("*"),
+    q.select("*").eq("env", env),
+    [env],
   );
   const { rows: daily } = useLive<DailyCycle>("daily_cycles", (q) =>
-    q.select("*").limit(400),
+    q.select("*").eq("env", env).limit(400),
+    [env],
   );
 
   const state = states[0] ?? null;

@@ -3,12 +3,15 @@
 import PositionList from "@/components/PositionList";
 import { Section } from "@/components/ui";
 import { useLive } from "@/lib/useLive";
+import { useEnv } from "@/lib/env";
 import { money, pnlClass, signed } from "@/lib/format";
 import type { Position } from "@/lib/types";
 
 export default function PositionsPage() {
+  const { env } = useEnv();
   const { rows: positions } = useLive<Position>("positions", (q) =>
-    q.select("*").order("id", { ascending: true }),
+    q.select("*").eq("env", env).order("id", { ascending: true }),
+    [env],
   );
 
   const floating = positions.reduce((a, p) => a + (Number(p.pnl_float) || 0), 0);

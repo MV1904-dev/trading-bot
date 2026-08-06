@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { useLive } from "@/lib/useLive";
+import { useEnv } from "@/lib/env";
 import {
   dateTime, heldFor, holdClass, holdMs, money, pnlClass, price, signed,
 } from "@/lib/format";
@@ -16,8 +17,10 @@ const PERIODS: [string, string][] = [
 ];
 
 export default function HistoryPage() {
+  const { env } = useEnv();
   const { rows: trades } = useLive<Trade>("trades", (q) =>
-    q.select("*").order("closed_at", { ascending: false }).limit(5000),
+    q.select("*").eq("env", env).order("closed_at", { ascending: false }).limit(5000),
+    [env],
   );
 
   const [strategy, setStrategy] = useState("all");

@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from "next";
 import Script from "next/script";
 import "./globals.css";
 import Nav from "@/components/Nav";
+import { EnvProvider } from "@/lib/env";
 
 export const metadata: Metadata = {
   title: "Trading bot",
@@ -37,10 +38,12 @@ export default function RootLayout({
         <Script id="theme-init" strategy="beforeInteractive">
           {THEME_INIT}
         </Script>
-        <Nav />
-        <div className="mx-auto w-full max-w-3xl px-4 pb-24 sm:pb-8">
-          {children}
-        </div>
+        <EnvProvider>
+          <Nav />
+          <div className="mx-auto w-full max-w-3xl px-4 pb-24 sm:pb-8">
+            {children}
+          </div>
+        </EnvProvider>
       </body>
     </html>
   );

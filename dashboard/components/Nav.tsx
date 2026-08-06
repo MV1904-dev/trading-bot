@@ -4,6 +4,33 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useState } from "react";
 import ThemeToggle from "@/components/ThemeToggle";
+import { useEnv, type BotEnv } from "@/lib/env";
+
+/** Prepínač demo/live dát. Live je predvolené — bot obchoduje naživo,
+    demo ostáva ako archív checkpointu. */
+function EnvToggle() {
+  const { env, setEnv } = useEnv();
+  return (
+    <div className="mr-1 flex overflow-hidden rounded-md border border-hair text-[11px] font-semibold">
+      {(["live", "demo"] as BotEnv[]).map((e) => (
+        <button
+          key={e}
+          onClick={() => setEnv(e)}
+          aria-pressed={env === e}
+          className={`px-2 py-1 uppercase transition-colors ${
+            env === e
+              ? e === "live"
+                ? "bg-red-600 text-white"
+                : "bg-surface text-ink"
+              : "text-faint"
+          }`}
+        >
+          {e}
+        </button>
+      ))}
+    </div>
+  );
+}
 
 /** Štyri hlavné položky sa vojdú bez orezania popisku; Stratégie sú
     statickejšia sekcia, tak idú pod „ďalšie". */
@@ -49,6 +76,7 @@ export default function Nav() {
           <span className="flex-1 text-sm font-medium sm:hidden">
             {all.find((l) => l.href === path)?.label ?? "Trading bot"}
           </span>
+          <EnvToggle />
           <ThemeToggle />
         </div>
       </header>

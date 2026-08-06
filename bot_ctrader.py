@@ -179,7 +179,7 @@ class CTraderBot:
         # Supabase zrkadlo pre dashboard. SQLite spojenie je viazané na
         # vlákno, ktoré ho vytvorilo, takže snapshot staviame TU (obchodné
         # vlákno) a push vlákno už len posiela hotový dict.
-        self.sync = SupabaseSync()
+        self.sync = SupabaseSync(env="demo" if cfg.DEMO else "live")
         self._sync_snap: dict = {}
         self._sync_lock = threading.Lock()
         self._sb_queue: queue.Queue = queue.Queue()
