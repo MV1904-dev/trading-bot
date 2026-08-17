@@ -41,6 +41,7 @@ export type Position = {
   pnl_float: number | null;
   spread_at_entry: number | null;
   spread_cost_usd: number | null;
+  updated_at: string;
 };
 
 export type Trade = {

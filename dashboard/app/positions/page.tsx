@@ -1,7 +1,7 @@
 "use client";
 
 import PositionList from "@/components/PositionList";
-import { Section } from "@/components/ui";
+import { DataStamp, RefreshButton, Section } from "@/components/ui";
 import { useLive } from "@/lib/useLive";
 import { useEnv } from "@/lib/env";
 import { money, pnlClass, signed } from "@/lib/format";
@@ -9,9 +9,13 @@ import type { Position } from "@/lib/types";
 
 export default function PositionsPage() {
   const { env } = useEnv();
-  const { rows: positions } = useLive<Position>("positions", (q) =>
+  const { rows: positions, reload } = useLive<Position>("positions", (q) =>
     q.select("*").eq("env", env).order("id", { ascending: true }),
     [env],
+  );
+  const newest = positions.reduce<string | null>(
+    (a, p) => (!a || (p.updated_at && p.updated_at > a) ? p.updated_at : a),
+    null,
   );
 
   const floating = positions.reduce((a, p) => a + (Number(p.pnl_float) || 0), 0);
@@ -21,6 +25,10 @@ export default function PositionsPage() {
   return (
     <main>
       <Section>
+        <div className="mb-2 flex items-center gap-2">
+          <DataStamp iso={newest} />
+          <span className="ml-auto"><RefreshButton onClick={reload} /></span>
+        </div>
         <div className="grid grid-cols-3 gap-2">
           <div className="tile">
             <div className="tile-label">Floating</div>

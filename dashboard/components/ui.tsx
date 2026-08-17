@@ -148,6 +148,42 @@ export function Detail({
   );
 }
 
+/** Ikonka obnovenia — pretočí sa a zavolá reload všetkých live dotazov.
+    Dáta v Supabase sú aj tak najviac ~60 s staré (push cyklus bota);
+    tlačidlo rieši prípad, keď realtime kanál ticho zaspí. */
+export function RefreshButton({ onClick }: { onClick: () => void }) {
+  const [spin, setSpin] = useState(false);
+  return (
+    <button
+      aria-label="Obnoviť dáta"
+      onClick={() => {
+        setSpin(true);
+        onClick();
+        setTimeout(() => setSpin(false), 700);
+      }}
+      className="inline-flex h-7 w-7 items-center justify-center rounded-md
+                 text-muted transition-colors hover:bg-surface hover:text-ink"
+    >
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none"
+           stroke="currentColor" strokeWidth="2" strokeLinecap="round"
+           strokeLinejoin="round" className={spin ? "animate-spin" : ""}>
+        <path d="M21 12a9 9 0 1 1-2.64-6.36" />
+        <path d="M21 3v6h-6" />
+      </svg>
+    </button>
+  );
+}
+
+/** „dáta k HH:MM:SS" — čas posledného údaju, nie čas otvorenia stránky. */
+export function DataStamp({ iso }: { iso: string | null | undefined }) {
+  if (!iso) return null;
+  return (
+    <span className="text-xs text-faint">
+      dáta k {new Date(iso).toLocaleTimeString("sk-SK")}
+    </span>
+  );
+}
+
 export function Empty({ children }: { children: React.ReactNode }) {
   return <p className="py-6 text-center text-sm text-muted">{children}</p>;
 }

@@ -90,7 +90,10 @@ class CTraderBotConfig:
     ATR_PERIOD: int = 14
     DATA_GAP_ALARM_S: int = 300
     HARD_RESTART_S: int = 900   # mŕtvy stream > 15 min → reštart procesu
-    DD_ALARM_PCT: float = 10.0
+    # 25 %: cesta gridu na 1,22 znamená floating ~-35 % equity DESIGNOM;
+    # alarm pri 10 % by zvonil týždne. CTRADER_DD_ALARM_PCT prebije.
+    DD_ALARM_PCT: float = field(
+        default_factory=lambda: float(os.getenv("CTRADER_DD_ALARM_PCT", "25")))
     TIMEZONE: str = "Europe/Bratislava"
     TG_PREFIX: str = "[CTRADER] "
     DB_PATH: Path = field(default_factory=lambda: ROOT / "data" / "bot_ctrader.db")
@@ -949,11 +952,12 @@ class CTraderBot:
                          + self._commands_help())
 
     # --- Supabase zrkadlo a príkazy z dashboardu -------------------------
-    def _capital_cached(self, max_age_s: float = 6 * 3600) -> dict:
-        """Vklady/výbery a swap sadzby. Oboje sa mení zriedka, ale bez nich
-        sa nedá spočítať návratnosť ani predpovedať náklad držania.
+    def _capital_cached(self, max_age_s: float = 900.0) -> dict:
+        """Vklady/výbery a swap sadzby.
 
-        Cash flow je 17 dotazov (týždenné okná), preto raz za 6 hodín.
+        15 min: pri 6 h ukazovala čerstvá dolievka pol dňa +45 % "zisku",
+        lebo sedela v balance, ale ešte nie vo vklade. ~18 dotazov na
+        obnovu je pri tejto frekvencii stále zanedbateľné.
         """
         if time.time() - self._capital_ts <= max_age_s and self._capital:
             return self._capital

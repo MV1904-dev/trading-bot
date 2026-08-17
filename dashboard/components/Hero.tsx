@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { createClient } from "@/lib/supabase";
 import { dateTime, money, pnlClass, price, signed } from "@/lib/format";
-import { Tile } from "@/components/ui";
+import { DataStamp, RefreshButton, Tile } from "@/components/ui";
 import type { BotState, DailyCycle, Position } from "@/lib/types";
 
 const STALE_MS = 3 * 60 * 1000;
@@ -17,10 +17,12 @@ export default function Hero({
   state,
   positions,
   daily,
+  onRefresh,
 }: {
   state: BotState | null;
   positions: Position[];
   daily: DailyCycle[];
+  onRefresh?: () => void;
 }) {
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
@@ -64,16 +66,18 @@ export default function Hero({
     <div className="pt-3">
       <div className="flex items-center gap-2">
         <span className={`h-1.5 w-1.5 rounded-full ${tone.dot}`} />
-        <span className="text-xs text-muted">
-          {tone.text} · {dateTime(state.heartbeat_at)?.slice(-5)}
-        </span>
+        <span className="text-xs text-muted">{tone.text}</span>
+        <DataStamp iso={state.heartbeat_at} />
         {state.failsafe && (
           <span className="chip bg-neg/15 text-neg">G8 poistka</span>
         )}
+        <span className="ml-auto flex items-center gap-1">
+          {onRefresh && <RefreshButton onClick={onRefresh} />}
+        </span>
         <button
           onClick={() => send(state.paused ? "start" : "pause")}
           disabled={busy}
-          className="btn-quiet ml-auto"
+          className="btn-quiet"
         >
           {state.paused ? "Spustiť" : "Pauza 60 min"}
         </button>

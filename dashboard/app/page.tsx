@@ -11,22 +11,23 @@ import type { BotState, DailyCycle, Position, Trade } from "@/lib/types";
 
 export default function Overview() {
   const { env } = useEnv();
-  const { rows: states } = useLive<BotState>("bot_state", (q) =>
+  const { rows: states, reload: r1 } = useLive<BotState>("bot_state", (q) =>
     q.select("*").eq("env", env).limit(1),
     [env],
   );
-  const { rows: positions } = useLive<Position>("positions", (q) =>
+  const { rows: positions, reload: r2 } = useLive<Position>("positions", (q) =>
     q.select("*").eq("env", env).order("opened_at", { ascending: false }),
     [env],
   );
-  const { rows: daily } = useLive<DailyCycle>("daily_cycles", (q) =>
+  const { rows: daily, reload: r3 } = useLive<DailyCycle>("daily_cycles", (q) =>
     q.select("*").eq("env", env).order("day", { ascending: false }).limit(400),
     [env],
   );
-  const { rows: trades } = useLive<Trade>("trades", (q) =>
+  const { rows: trades, reload: r4 } = useLive<Trade>("trades", (q) =>
     q.select("*").eq("env", env).order("closed_at", { ascending: false }).limit(500),
     [env],
   );
+  const refreshAll = () => { r1(); r2(); r3(); r4(); };
 
   const state = states[0] ?? null;
   const swapRatio =
@@ -36,7 +37,7 @@ export default function Overview() {
 
   return (
     <main>
-      <Hero state={state} positions={positions} daily={daily} />
+      <Hero state={state} positions={positions} daily={daily} onRefresh={refreshAll} />
 
       <Section
         title="Pozície"
