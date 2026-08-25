@@ -638,9 +638,9 @@ class CTraderBot:
         floating = 0.0
         if mid is not None:
             for r in open_rows:
-                floating += ((mid - r["entry_price"]) * r["qty"]
-                             if r["side"] == "long"
-                             else (r["entry_price"] - mid) * r["qty"])
+                floating += (((mid - r["entry_price"]) if r["side"] == "long"
+                              else (r["entry_price"] - mid))
+                             * r["qty"] / mid)
         jid = self.judge.submit(
             sig.strategy_id, sig.side, bar.close, sig.tp_price,
             getattr(sig, "sl_price", 0.0), atr or 0.0,
@@ -751,7 +751,7 @@ class CTraderBot:
         if mid:
             for r in rows:
                 floating += ((mid - r["entry_price"]) if r["side"] == "long"
-                             else (r["entry_price"] - mid)) * r["qty"]
+                             else (r["entry_price"] - mid)) * r["qty"] / mid
         from datetime import timedelta
         yesterday = (now - timedelta(days=1)).strftime("%Y-%m-%d")
         cycles = self.db.cycles_on_day(yesterday)
@@ -1145,9 +1145,10 @@ class CTraderBot:
                 spread = ctx.get("spread_at_entry")
                 pnl = None
                 if mid is not None:
-                    pnl = (mid - r["entry_price"]) * r["qty"] \
-                        if r["side"] == "long" \
-                        else (r["entry_price"] - mid) * r["qty"]
+                    # (vstup − kurz) × objem je USD; účet je v EUR — bez
+                    # prepočtu boli floating čísla ~14 % nafúknuté
+                    pnl = ((mid - r["entry_price"]) if r["side"] == "long"
+                           else (r["entry_price"] - mid)) * r["qty"] / mid
                     floating += pnl
                 positions.append({
                     "id": r["id"],
