@@ -1,6 +1,8 @@
 # env files – nikdy necommitovať prihlasovacie údaje
 .env
 .env*
+# …okrem vzorovej šablóny bez hodnôt
+!.env.example
 
 # python
 __pycache__/
