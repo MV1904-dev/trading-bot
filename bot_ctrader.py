@@ -56,6 +56,7 @@ from trading.tg import Telegram
 
 ROOT = Path(__file__).resolve().parent
 log = logging.getLogger("bot_ctrader")
+NY_TZ = ZoneInfo("America/New_York")   # FX týždeň: Ne 17:00 → Pia 17:00 NY
 
 # Sviečky pre Daily Plan builder — bot ich sype, plánovač číta.
 PLAN_CANDLES = ROOT / "data" / "plan_candles.json"
@@ -402,6 +403,11 @@ class CTraderBot:
     def _price(self) -> dict | None:
         q = self.broker.quote()
         if q is None or q["age_s"] > 120 or not self.broker.is_connected():
+            if self._market_closed():
+                # Víkendové ticho sa nesmie započítať do mŕtveho času:
+                # bez posunu baseline padol pri nedeľnom otvorení okamžite
+                # ~46-hodinový alarm + tvrdý reštart (16., 23. a 30. 8. 2026).
+                self.last_md_ts = time.time()
             self._maybe_gap_alarm()
             self._maybe_reconnect()
             return None
@@ -489,19 +495,23 @@ class CTraderBot:
     def _market_closed(now: float | None = None) -> bool:
         """Je forexový trh zatvorený?
 
-        Týždeň beží od nedeľného otvorenia Sydney (21:00 UTC) do piatkového
-        zatvorenia New Yorku (21:00 UTC). Cez víkend nechodia žiadne ticky —
-        watchdog to bez tejto kontroly čítal ako mŕtvy stream a reštartoval
-        proces každých 15 minút celý víkend (1. 8. 2026: 31 reštartov do
-        soboty predpoludním, každý s Telegram hláškou).
+        Týždeň beží od nedeľného otvorenia do piatkového zatvorenia
+        o 17:00 newyorského času — hranice preto počítame v America/New_York,
+        nie v UTC, aby sedeli aj po prechode letný/zimný čas. Cez víkend
+        nechodia žiadne ticky — watchdog to bez tejto kontroly čítal ako
+        mŕtvy stream a reštartoval proces každých 15 minút celý víkend
+        (1. 8. 2026: 31 reštartov do soboty predpoludním). Okraje majú
+        rezervu (piatok od 16:55, nedeľa do 17:10 NY): tesne okolo hraníc
+        broker quotovať nemusí a watchdog by z toho robil falošný výpadok.
         """
-        t = datetime.fromtimestamp(now or time.time(), timezone.utc)
-        wd, hour = t.weekday(), t.hour        # pondelok = 0, nedeľa = 6
-        if wd == 5:                            # sobota celá
+        t = datetime.fromtimestamp(now or time.time(),
+                                   timezone.utc).astimezone(NY_TZ)
+        wd, mins = t.weekday(), t.hour * 60 + t.minute   # pondelok = 0
+        if wd == 5:                                       # sobota celá
             return True
-        if wd == 4 and hour >= 21:             # piatok po 21:00 UTC
+        if wd == 4 and mins >= 16 * 60 + 55:              # piatok od 16:55 NY
             return True
-        if wd == 6 and hour < 21:              # nedeľa do 21:00 UTC
+        if wd == 6 and mins < 17 * 60 + 10:               # nedeľa do 17:10 NY
             return True
         return False
 
