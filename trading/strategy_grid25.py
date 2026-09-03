@@ -38,6 +38,11 @@ class Grid25Config:
     atr_mult: float = 2.0
     base_levels: int = 20
     reserve_levels: int = 10
+    # Vypínače strán (riadi ich swapová automatika v bot_ctrader).
+    # Vypnutá strana sa správa ako mimo pásma: kotva sa ďalej posúva
+    # a po zapnutí platí štandardná gap logika — žiadny výbuch vstupov.
+    long_enabled: bool = True
+    short_enabled: bool = True
 
     @property
     def cap(self) -> int:
@@ -85,8 +90,8 @@ class Grid25(StrategyBase):
             return []
 
         signals: list[Signal] = []
-        allow_long = c < cfg.band_high
-        allow_short = c > cfg.band_low
+        allow_long = cfg.long_enabled and c < cfg.band_high
+        allow_short = cfg.short_enabled and c > cfg.band_low
 
         if allow_long and len(self.longs) < cfg.cap:
             drop = self.ref_long - c
@@ -150,6 +155,8 @@ class Grid25(StrategyBase):
 
     def status_line(self) -> str:
         return (f"{self.id}: {'ON' if self.enabled else 'OFF'} | "
-                f"long {len(self.longs)}/{self.cfg.cap}, "
-                f"short {len(self.shorts)}/{self.cfg.cap} | "
+                f"long {len(self.longs)}/{self.cfg.cap}"
+                f"{'' if self.cfg.long_enabled else ' [VYP]'}, "
+                f"short {len(self.shorts)}/{self.cfg.cap}"
+                f"{'' if self.cfg.short_enabled else ' [VYP]'} | "
                 f"ref_L {self.ref_long or 0:.5f} ref_S {self.ref_short or 0:.5f}")

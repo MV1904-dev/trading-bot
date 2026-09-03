@@ -78,13 +78,18 @@ class CTraderBotConfig:
     CAP_RESERVE: int = 10
     STEP_SHORT: float = 0.0015     # lab G2B geometria
     STEP_LONG: float = 0.00225
-    # Swapová automatika long kroku (CTRADER_SWAP_AUTO=0 vypne): kým broker
-    # longy swapovo neznevýhodňuje, long krok sa stiahne na STEP_SHORT.
-    # Prahy sú v pips/noc znevýhodnenia longu (swap_short − swap_long).
+    # Swapová automatika krokov (CTRADER_SWAP_AUTO=0 vypne, vtedy platia
+    # STEP_SHORT/STEP_LONG konštanty vyššie): každá strana dostane krok
+    # podľa VLASTNÉHO nákladu na držanie v €/deň pri aktuálnej QTY
+    # (záporný swap = platíš; kladný/nulový = náklad 0). Zadanie Mariána
+    # 3. 9. 2026. Nad poslednou hranicou sa strana neotvára vôbec.
     SWAP_AUTO: bool = field(
         default_factory=lambda: os.getenv("CTRADER_SWAP_AUTO", "1") != "0")
-    SWAP_SYM_ENTER: float = 0.25   # ≤ → symetrický režim
-    SWAP_SYM_EXIT: float = 0.40    # ≥ → späť na asymetriu (hysteréza)
+    SWAP_TIERS: tuple = (
+        (0.25, 0.0010),   # náklad ≤ 0,25 €/deň → krok ±0,10 %
+        (0.50, 0.0013),   # ≤ 0,50 €/deň        → krok ±0,13 %
+        (1.00, 0.0015),   # ≤ 1,00 €/deň        → krok ±0,15 %
+    )                      # > 1,00 €/deň        → strana VYPNUTÁ
     P500_SIGNALS: bool = True      # zrkadliace signály pre Plus500 (TG)
     P500_SIGNAL_QTY: float = 10_000
     BRIEFING_HOUR: int = 8         # ranný briefing 8–10 h
@@ -161,11 +166,21 @@ class CTraderBot:
                                    step_short=cfg.STEP_SHORT,
                                    step_long=cfg.STEP_LONG))
         grid.id = "Grid25-G2B-CT"
-        # Swapová automatika si režim pamätá v DB — po reštarte musí long
-        # krok zodpovedať poslednému rozhodnutiu, nie defaultu z configu.
-        self._grid_mode = self.db.meta_get("grid_mode", "asym")
-        if self._grid_mode == "sym":
-            grid.cfg.step_long = cfg.STEP_SHORT
+        # Swapová automatika si kroky pamätá v DB — po reštarte musia
+        # zodpovedať poslednému rozhodnutiu, nie defaultom z configu.
+        # Formát meta "grid_steps": "<krok_short>|<krok_long>", 0 = VYP.
+        if cfg.SWAP_AUTO:
+            saved = self.db.meta_get("grid_steps", "")
+            try:
+                s_short, s_long = (float(x) for x in saved.split("|"))
+                grid.cfg.short_enabled = s_short > 0
+                grid.cfg.long_enabled = s_long > 0
+                if s_short > 0:
+                    grid.cfg.step_short = s_short
+                if s_long > 0:
+                    grid.cfg.step_long = s_long
+            except ValueError:
+                pass                      # prvý beh / stará DB — defaulty
         s7 = S7Continuation(S7Config(qty=cfg.S7_QTY))
         s7.enabled = cfg.S7_ENABLED
         self.strategies = [grid, s7]
@@ -751,7 +766,9 @@ class CTraderBot:
 
     def _config_line(self) -> str:
         g = self.strategy.cfg
-        return (f"⚙️ G2B {g.qty:,.0f} | krok +{g.step_short:.2%}/−{g.step_long:.3%} "
+        krok_s = f"+{g.step_short:.2%}" if g.short_enabled else "VYP"
+        krok_l = f"−{g.step_long:.3%}" if g.long_enabled else "VYP"
+        return (f"⚙️ G2B {g.qty:,.0f} | krok S {krok_s} / L {krok_l} "
                 f"| TP {g.tp_pct:.2%} | pásma {g.band_low:.2f}–{g.band_high:.2f} "
                 f"| kapacita {g.base_levels}+{g.reserve_levels} | blackout ±30 min "
                 f"| G8 poistka | S7 {'ON' if self.cfg.S7_ENABLED else 'off'}")
@@ -1060,49 +1077,76 @@ class CTraderBot:
                           f"swap zmena: {'; '.join(moved)}")
         log.warning("Swap sadzby sa zmenili: %s", "; ".join(moved))
 
+    def _swap_cost_eur_day(self, swap_pips: float, mid: float) -> float:
+        """Náklad držania strany v €/deň pri aktuálnej QTY.
+
+        cTrader swap je v pips/noc (záporný = platíš, kladný = dostávaš —
+        vtedy je náklad 0). Pip value pre EURUSD = QTY × 0,0001 USD,
+        na € cez aktuálny kurz. Stredové 3× rollover neriešime — triedime
+        podľa nočnej sadzby, nie podľa kalendára."""
+        pip_eur = self.cfg.QTY * 0.0001 / mid
+        return max(0.0, -swap_pips) * pip_eur
+
+    def _swap_tier(self, cost: float) -> float | None:
+        """€/deň → krok strany; None = strana sa neotvára."""
+        for limit, step in self.cfg.SWAP_TIERS:
+            if cost <= limit:
+                return step
+        return None
+
     def _apply_swap_regime(self, cap: dict) -> None:
-        """Symetrický long krok, kým longy nie sú swapovo znevýhodnené.
+        """Kroky gridu podľa nákladu držania (zadanie Mariána 3. 9. 2026).
 
-        Lab G2B drží long krok 1,5× širší preto, že long strana platila
-        ~1 pip/noc navyše. Keď broker sadzby vyrovná (1. 9. 2026 na live:
-        0,00/0,00), dôvod asymetrie mizne — long krok stiahneme na úroveň
-        short kroku. Rozhodnutie Mariána 1. 9. 2026, s vedomím lab výhrady
-        (sym long krok mal v IS 2023-24 stratu a 3× DD) aj rizika, že sa
-        sadzby vrátia, kým visia otvorené longy.
-
-        Hysteréza ENTER/EXIT drží režim, keď sadzba sedí na hrane prahu.
-        Návrat k asymetrii je okamžitý (bezpečný smer). Mení sa LEN krok
-        pre nové vstupy — otvorené pozície a ich TP na serveri nie.
+        Každá strana NEZÁVISLE podľa vlastného nákladu v €/deň:
+        ≤ 0,25 → krok 0,10 %; ≤ 0,50 → 0,13 %; ≤ 1,00 → 0,15 %;
+        nad 1 € sa strana neotvára. Mení sa LEN vstupná geometria —
+        otvorené pozície a ich TP na serveri nie; vypnutá strana ďalej
+        posúva kotvu (rovnaká mechanika ako pásmový filter), takže
+        znovuzapnutie nespustí výbuch vstupov. Rozhodnutie platí
+        s vedomím lab výhrady: G2B geometria (0,15/0,225) je jediná
+        lab-validovaná; hustejšie kroky sú vedomý experiment.
         """
         cur_l, cur_s = cap.get("swap_long"), cap.get("swap_short")
         if not self.cfg.SWAP_AUTO or cur_l is None or cur_s is None:
             return
-        # kladný swap = broker platí tebe; o koľko je long drahší než short
-        long_penalty = cur_s - cur_l
-        if self._grid_mode != "sym" \
-                and long_penalty <= self.cfg.SWAP_SYM_ENTER:
-            new_mode, step = "sym", self.cfg.STEP_SHORT
-        elif self._grid_mode == "sym" \
-                and long_penalty >= self.cfg.SWAP_SYM_EXIT:
-            new_mode, step = "asym", self.cfg.STEP_LONG
-        else:
+        q = self.broker.quote()
+        mid = q["mid"] if q else None
+        if not mid:
+            return                        # bez kurzu neprepočítame €/deň
+        cost_s = self._swap_cost_eur_day(cur_s, mid)
+        cost_l = self._swap_cost_eur_day(cur_l, mid)
+        step_s = self._swap_tier(cost_s)
+        step_l = self._swap_tier(cost_l)
+
+        g = self.strategy.cfg
+        cur_state = (g.step_short if g.short_enabled else None,
+                     g.step_long if g.long_enabled else None)
+        if cur_state == (step_s, step_l):
             return
-        self._grid_mode = new_mode
-        self.strategy.cfg.step_long = step
-        self.db.meta_set("grid_mode", new_mode)
-        popis = ("SYMETRIA — longy aj shorty za rovnako"
-                 if new_mode == "sym" else
-                 "ASYMETRIA — longy opäť drahšie, krok späť na 1,5×")
-        msg = (f"⚖️ Grid režim: {popis}\n"
-               f"swap long {cur_l:+.4f} / short {cur_s:+.4f} "
-               f"(znevýhodnenie longu {long_penalty:+.2f} pips/noc)\n"
-               f"long krok → −{step:.3%} (short krok +"
-               f"{self.strategy.cfg.step_short:.2%} bez zmeny)")
+
+        g.short_enabled = step_s is not None
+        g.long_enabled = step_l is not None
+        if step_s is not None:
+            g.step_short = step_s
+        if step_l is not None:
+            g.step_long = step_l
+        self.db.meta_set("grid_steps", f"{step_s or 0}|{step_l or 0}")
+
+        def _fmt(side: str, swap: float, cost: float,
+                 step: float | None) -> str:
+            krok = f"krok ±{step:.2%}" if step is not None else "⛔ NEOTVÁRAŤ"
+            return (f"{side}: swap {swap:+.4f} → náklad {cost:.2f} €/deň "
+                    f"→ {krok}")
+        msg = ("⚖️ Grid kroky podľa swapov (na {:,.0f}):\n".format(self.cfg.QTY)
+               + _fmt("short", cur_s, cost_s, step_s) + "\n"
+               + _fmt("long", cur_l, cost_l, step_l))
         self.tg.send(msg)
-        self.db.log_event("info", f"grid režim {new_mode}: long krok {step:.5f}, "
-                                  f"swap {cur_l:+.4f}/{cur_s:+.4f}")
-        log.info("Grid režim %s (long_penalty %.2f) — long krok %.5f",
-                 new_mode, long_penalty, step)
+        self.db.log_event("info",
+                          f"grid kroky: short {step_s or 'VYP'} "
+                          f"(náklad {cost_s:.2f} €/d), long {step_l or 'VYP'} "
+                          f"(náklad {cost_l:.2f} €/d)")
+        log.info("Grid kroky podľa swapov: short %s (%.2f €/d), "
+                 "long %s (%.2f €/d)", step_s, cost_s, step_l, cost_l)
 
     def _margin_now(self, equity: float, max_age_s: float = 60.0) -> dict:
         """Využitie marže. ProtoOATrader maržu nenesie, takže ju skladáme
@@ -1346,7 +1390,11 @@ class CTraderBot:
         c = self.cfg
         return {
             "symbol": c.SYMBOL, "qty": c.QTY,
-            "step_short": c.STEP_SHORT, "step_long": c.STEP_LONG,
+            # živé hodnoty zo stratégie — swapová automatika ich mení za behu
+            "step_short": self.strategy.cfg.step_short,
+            "step_long": self.strategy.cfg.step_long,
+            "short_enabled": self.strategy.cfg.short_enabled,
+            "long_enabled": self.strategy.cfg.long_enabled,
             "tp_pct": self.strategy.cfg.tp_pct,
             "band_low": self.strategy.cfg.band_low,
             "band_high": self.strategy.cfg.band_high,
