@@ -15,11 +15,16 @@ má access token povolené — z toho je vidieť, či je live účet ešte v gra
        ssh hetzner 'systemctl stop ctrader-bot'
        ssh hetzner 'cd /home/marian/trading-bot && sudo -u marian .venv/bin/python scripts/ctrader_auth_check.py'
        ssh hetzner 'systemctl start ctrader-bot'
+
+Cudziu aplikáciu (napr. novú, ktorá sa má overiť pred zásahom do .env)
+zadáš buď cez --client-id/--client-secret, alebo postupne cez --ask:
+       ssh -t hetzner 'cd /home/marian/trading-bot && sudo -u marian .venv/bin/python scripts/ctrader_auth_check.py --ask'
 """
 
 from __future__ import annotations
 
 import argparse
+import getpass
 import logging
 import os
 import sys
@@ -73,7 +78,17 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--client-id", default="", help="prebije .env")
     ap.add_argument("--client-secret", default="", help="prebije .env")
+    ap.add_argument("--ask", action="store_true",
+                    help="spýtať sa na credentials postupne (secret sa "
+                         "nezobrazuje a neostane v histórii shellu)")
     args = ap.parse_args()
+    if args.ask:
+        args.client_id = input("Client ID: ").strip()
+        args.client_secret = getpass.getpass("Client Secret (nezobrazí sa): ").strip()
+        if not args.client_id or not args.client_secret:
+            print("CHYBA: prázdne Client ID alebo Secret.", file=sys.stderr)
+            return 2
+        print()
     # Polovica dvojice je vždy preklep, nie zámer — a ticho by to zobralo
     # druhú hodnotu z .env a otestovalo úplne inú aplikáciu, než človek
     # čaká (presne to sa už raz stalo so starou verziou skriptu).

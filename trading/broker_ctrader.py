@@ -70,9 +70,14 @@ class CTraderBroker:
                  account_id: str, *, refresh_token: str = "",
                  env_path: str = "", demo: bool = True,
                  symbol_name: str = "EURUSD"):
-        if not all([client_id, client_secret, access_token]):
-            raise CTraderError("Chýba CTRADER_CLIENT_ID / CLIENT_SECRET / "
-                               "ACCESS_TOKEN.")
+        # Access token treba až na account auth. Bez account_id sa robí iba
+        # app auth (výpis účtov, diagnostika cudzej aplikácie) a tam by
+        # povinný token znamenal, že sa app auth nedá otestovať samostatne.
+        if not client_id or not client_secret:
+            raise CTraderError("Chýba CTRADER_CLIENT_ID / CLIENT_SECRET.")
+        if account_id and not access_token:
+            raise CTraderError("Chýba CTRADER_ACCESS_TOKEN "
+                               "(je potrebný pre account auth).")
         self.client_id = client_id
         self.client_secret = client_secret
         self.access_token = access_token
