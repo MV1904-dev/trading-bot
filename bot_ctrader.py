@@ -514,13 +514,24 @@ class CTraderBot:
                     "spojenie.", gap)
         self.db.log_event("warn", f"proces zmrazený {gap / 60:.0f} min "
                                   f"(uspatie stroja), reconnect")
+        ok = False
         try:
             self.broker.reconnect()
+            ok = True
             log.info("Spojenie obnovené po prebudení.")
         except Exception as exc:  # noqa: BLE001
             log.warning("Reconnect po prebudení zlyhal: %s", exc)
-        self.last_md_ts = time.time()
         self._last_resub = 0.0
+        # connect() čaká na auth až 45 s (s refreshom tokenu 90 s) a blokuje
+        # slučku. Bez tohto riadku vyzerá ten čas ako ďalšie "zamrznutie"
+        # a _check_suspend sa spustí znova — donekonečna.
+        self._last_loop_ts = time.time()
+        if not ok:
+            # Nulovať last_md_ts po ZLYHANOM reconnecte znamená klamať
+            # watchdog: dáta sú stále mŕtve. Presne takto bot bežal 4 dni
+            # bez jediného alarmu aj tvrdého reštartu, hoci nemal cenu.
+            return
+        self.last_md_ts = time.time()
 
     @staticmethod
     def _market_closed(now: float | None = None) -> bool:
@@ -1157,6 +1168,19 @@ class CTraderBot:
         log.info("Grid kroky podľa swapov: short %s (%.2f €/d), "
                  "long %s (%.2f €/d)", step_s, cost_s, step_l, cost_l)
 
+    @staticmethod
+    def _margin_view(used: float, equity: float) -> dict:
+        """Tvar, ktorý ide do stavu bota — a teda do stĺpcov bot_state.
+
+        Jedno miesto zámerne: keď chybová vetva vracala rovno _margin_cache,
+        išiel do stavu aj kľúč "positions" (zoznam pozícií z reconcile).
+        Supabase taký stĺpec v bot_state nemá a CELÝ upsert padol na
+        400 PGRST204 — dashboard potom mesiace ukazoval posledný zapísaný
+        stav a tlačidlo refresh s tým nevedelo nič urobiť.
+        """
+        return {"used_margin": used, "free_margin": equity - used,
+                "margin_level": (equity / used * 100) if used else None}
+
     def _margin_now(self, equity: float, max_age_s: float = 60.0) -> dict:
         """Využitie marže. ProtoOATrader maržu nenesie, takže ju skladáme
         z otvorených pozícií (reconcile vracia usedMargin per pozícia).
@@ -1166,22 +1190,19 @@ class CTraderBot:
         """
         if (time.time() - self._margin_ts <= max_age_s
                 and self._margin_cache):
-            used = self._margin_cache["used_margin"]
-            return {"used_margin": used, "free_margin": equity - used,
-                    "margin_level": (equity / used * 100) if used else None}
+            return self._margin_view(self._margin_cache["used_margin"], equity)
         try:
             plist = self.broker.positions()
             used = sum(p.get("used_margin", 0.0) for p in plist)
         except CTraderError as exc:
+            # Broker mlčí (typicky mŕtve spojenie) — radšej posledná známa
+            # marža než nič, ale VŽDY v tvare pre bot_state.
             log.debug("Maržu sa nepodarilo zistiť: %s", exc)
-            return self._margin_cache or {}
+            return self._margin_view(
+                (self._margin_cache or {}).get("used_margin", 0.0), equity)
         self._margin_ts = time.time()
         self._margin_cache = {"used_margin": used, "positions": plist}
-        return {
-            "used_margin": used,
-            "free_margin": equity - used,
-            "margin_level": (equity / used * 100) if used else None,
-        }
+        return self._margin_view(used, equity)
 
     def _dump_plan_candles(self, max_age_s: float = 6 * 3600) -> None:
         """Odloží H1 a D1 sviečky na disk pre Daily Plan builder.
