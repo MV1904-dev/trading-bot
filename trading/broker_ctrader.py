@@ -89,6 +89,10 @@ class CTraderBroker:
         self._client: Optional[Client] = None
         self._app_authed = threading.Event()
         self._ready = threading.Event()
+        # Opakovanie auth reťazca (viď _schedule_reauth) — backoff rastie
+        # od 3 s, po úspešnom account authe sa vracia na začiatok.
+        self._auth_backoff = 3.0
+        self._auth_retry_pending = False
         self._bid: Optional[float] = None
         self._ask: Optional[float] = None
         self._spot_ts = 0.0
@@ -195,6 +199,7 @@ class CTraderBroker:
             self._client = None
         self._ready.clear()
         self._app_authed.clear()
+        self._auth_backoff = 3.0
 
     def is_connected(self) -> bool:
         return self._ready.is_set()
@@ -232,7 +237,10 @@ class CTraderBroker:
         if err is not None:
             log.error("App auth zamietnutý: %s %s", err.errorCode,
                       getattr(err, "description", ""))
-            return                     # _ready ostáva dole → connect() to rieši
+            # connect() to ustráži pri PRVOM spojení; po auto-reconnecte
+            # už nikto nečaká, preto si reťazec pýta opakovanie sám.
+            self._schedule_reauth(f"app auth {err.errorCode}")
+            return
         self._app_authed.set()
         if not self.account_id:
             self._ready.set()          # len app auth (výpis účtov)
@@ -259,6 +267,7 @@ class CTraderBroker:
             reactor.callLater(3.0, self._send_account_auth)
             return
         self._ready.set()
+        self._auth_backoff = 3.0
         # po re-connecte treba obnoviť odber spotov (symbol už poznáme)
         if self.symbol_id is not None:
             req = ProtoOASubscribeSpotsReq()
@@ -267,8 +276,42 @@ class CTraderBroker:
             self._client.send(req)
             log.info("Spot odber obnovený po reconnecte.")
 
+    # Strop backoffu. Vyššie nemá zmysel ísť: bot má vlastnú poistku
+    # (dáta mŕtve > HARD_RESTART_S → tvrdý reštart procesu).
+    AUTH_RETRY_MAX_S = 60.0
+
     def _auth_err(self, failure) -> None:
+        """Deferred auth požiadavky zlyhal (typicky timeout SDK po 5 s).
+
+        Predtým sa chyba len zalogovala a reťazec skončil. Spojenie pritom
+        ostalo živé, ale NEAUTORIZOVANÉ: _ready dole, žiadny odber spotov.
+        Keďže _on_connected spúšťa reťazec len pri (re)connecte TCP, nemal
+        ho kto naštartovať znova — bot bežal ďalej s poslednou známou cenou,
+        neotváral vstupy a dashboard ukazoval nemenné pozície.
+        """
         log.error("cTrader auth zlyhal: %s", failure)
+        self._schedule_reauth("deferred zlyhal")
+
+    def _schedule_reauth(self, why: str) -> None:
+        """Naplánuje zopakovanie auth reťazca (beží v reactor vlákne)."""
+        if self._client is None or self._ready.is_set():
+            return
+        if self._auth_retry_pending:
+            return                     # jeden naplánovaný pokus stačí
+        self._auth_retry_pending = True
+        delay, self._auth_backoff = (
+            self._auth_backoff,
+            min(self._auth_backoff * 2, self.AUTH_RETRY_MAX_S))
+        log.warning("Auth reťazec zopakujem o %.0f s (%s).", delay, why)
+        from twisted.internet import reactor
+        reactor.callLater(delay, self._retry_reauth)
+
+    def _retry_reauth(self) -> None:
+        self._auth_retry_pending = False
+        if self._client is None or self._ready.is_set():
+            return
+        self._app_authed.clear()
+        self._reauth_chain()
 
     def _on_disconnected(self, _client, reason) -> None:
         log.warning("cTrader odpojený: %s", reason)
