@@ -839,11 +839,15 @@ class CTraderBot:
         if not missing:
             return
         oldest_ms = int(min(r["ts_open"] for r in missing) * 1000)
-        deals = {}
         try:
             deals = self.broker.closed_deals_since(oldest_ms)
-        except CTraderError:
-            pass
+        except CTraderError as exc:
+            # Bez dealov by _finalize_close zapísal ODHAD (cena = TP, nulový
+            # swap aj provízia) a natrvalo. Radšej to nechať otvorené a
+            # skúsiť o 30 s znova — obchod je zatvorený u brokera tak či tak.
+            log.warning("História dealov sa nenačítala (%s) — doúčtovanie "
+                        "odkladám na ďalší pokus.", exc)
+            return
         for row in missing:
             self._finalize_close(row["id"], deals)
 

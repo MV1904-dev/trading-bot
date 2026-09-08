@@ -651,16 +651,40 @@ class CTraderBroker:
         raise CTraderError(
             f"Pozícia {position_id}: potvrdenie zatvorenia neprišlo do 20 s.")
 
+    # Ako pri cash_flow: dlhšie obdobie sa ťahá po týždňoch. Strop drží
+    # slučku konečnou, aj keby prišiel nezmyselne starý timestamp.
+    DEAL_HISTORY_MAX_DAYS = 120
+
     def closed_deals_since(self, ts_ms: int) -> dict:
         """{positionId: {'close_price','gross','swap','commission'}} pre
-        zatvárajúce dealy od ts_ms (peniaze v mene účtu)."""
-        req = ProtoOADealListReq()
-        req.ctidTraderAccountId = self.account_id
-        req.fromTimestamp = ts_ms
-        req.toTimestamp = int(time.time() * 1000)
-        req.maxRows = 500
-        res = self._send(req, timeout=20)
+        zatvárajúce dealy od ts_ms (peniaze v mene účtu).
+
+        API dovolí okno najviac 7 dní na dotaz (INCORRECT_BOUNDARIES), preto
+        sa stránkuje. Jediný dotaz cez dlhšie obdobie zlyhal CELÝ, takže po
+        výpadku dlhšom než týždeň sa pozície doúčtovali odhadom (TP cena,
+        nulový swap aj provízia) namiesto reálneho zatváracieho dealu.
+        """
+        week_ms = 7 * 86_400 * 1000
+        now_ms = int(time.time() * 1000)
+        floor_ms = now_ms - self.DEAL_HISTORY_MAX_DAYS * 86_400 * 1000
+        start = min(max(int(ts_ms), floor_ms), now_ms)
         out = {}
+        while start < now_ms:
+            end = min(start + week_ms, now_ms)
+            req = ProtoOADealListReq()
+            req.ctidTraderAccountId = self.account_id
+            req.fromTimestamp = start
+            req.toTimestamp = end
+            req.maxRows = 500
+            # Zlyhanie okna sa NEprehĺta: volajúci radšej skúsi o 30 s znova,
+            # než by zapísal do histórie odhadnuté čísla.
+            res = self._send(req, timeout=20)
+            self._collect_close_deals(res, out)
+            start = end
+        return out
+
+    @staticmethod
+    def _collect_close_deals(res, out: dict) -> None:
         for d in res.deal:
             cpd = getattr(d, "closePositionDetail", None)
             if cpd is None or not getattr(cpd, "closedVolume", 0):
@@ -677,4 +701,3 @@ class CTraderBroker:
                 # 0,90 — overené na surovom ProtoOADealListRes).
                 "commission": abs(cpd.commission) / 10 ** digits,
             }
-        return out
