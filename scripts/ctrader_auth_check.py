@@ -74,6 +74,13 @@ def main() -> int:
     ap.add_argument("--client-id", default="", help="prebije .env")
     ap.add_argument("--client-secret", default="", help="prebije .env")
     args = ap.parse_args()
+    # Polovica dvojice je vždy preklep, nie zámer — a ticho by to zobralo
+    # druhú hodnotu z .env a otestovalo úplne inú aplikáciu, než človek
+    # čaká (presne to sa už raz stalo so starou verziou skriptu).
+    if bool(args.client_id) != bool(args.client_secret):
+        print("CHYBA: --client-id a --client-secret sa zadávajú spolu.",
+              file=sys.stderr)
+        return 2
 
     load_dotenv()
     cid = args.client_id or os.getenv("CTRADER_CLIENT_ID", "")
