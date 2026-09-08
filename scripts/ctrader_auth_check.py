@@ -19,6 +19,7 @@ má access token povolené — z toho je vidieť, či je live účet ešte v gra
 
 from __future__ import annotations
 
+import argparse
 import logging
 import os
 import sys
@@ -44,6 +45,9 @@ def check(label: str, demo: bool, cid: str, secret: str, token: str) -> bool:
         print(f"  ❌ app auth ZLYHAL: {exc}")
         return False
     print("  ✅ app auth OK")
+    if not token:
+        print("     (zoznam účtov preskakujem — bez access tokenu)")
+        return True
     try:
         accounts = broker.account_list()
     except Exception as exc:  # noqa: BLE001
@@ -63,10 +67,20 @@ def check(label: str, demo: bool, cid: str, secret: str, token: str) -> bool:
 def main() -> int:
     logging.basicConfig(level=logging.WARNING,
                         format="  %(levelname)s %(name)s: %(message)s")
+    # Credentials sa dajú podstrčiť z príkazového riadka: novú aplikáciu
+    # treba overiť PRED tým, než sa jej kľúče dostanú do .env, aby sa
+    # bežiaca (hoc aj pokazená) konfigurácia nerozbila ešte viac.
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--client-id", default="", help="prebije .env")
+    ap.add_argument("--client-secret", default="", help="prebije .env")
+    args = ap.parse_args()
+
     load_dotenv()
-    cid = os.getenv("CTRADER_CLIENT_ID", "")
-    secret = os.getenv("CTRADER_CLIENT_SECRET", "")
-    token = os.getenv("CTRADER_ACCESS_TOKEN", "")
+    cid = args.client_id or os.getenv("CTRADER_CLIENT_ID", "")
+    secret = args.client_secret or os.getenv("CTRADER_CLIENT_SECRET", "")
+    # Access token patrí ku konkrétnej aplikácii — pri cudzích kľúčoch
+    # by sa ním nemalo zmysel oháňať, app auth ho aj tak nepoužíva.
+    token = "" if args.client_id else os.getenv("CTRADER_ACCESS_TOKEN", "")
     if not cid or not secret:
         print("CHYBA: v .env chýba CTRADER_CLIENT_ID / CLIENT_SECRET.",
               file=sys.stderr)
@@ -74,8 +88,9 @@ def main() -> int:
     want_demo = os.getenv("CTRADER_DEMO", "1") != "0"
     print(f"CTRADER_DEMO={'1' if want_demo else '0'} → bot beží proti "
           f"{'DEMO' if want_demo else 'LIVE'} endpointu.")
-    print(f"CLIENT_ID … {cid[-6:]}, ACCESS_TOKEN "
-          f"{'je nastavený' if token else 'CHÝBA'}")
+    print(f"CLIENT_ID … {cid[-6:]}"
+          + (" (z príkazového riadka)" if args.client_id else "")
+          + f", ACCESS_TOKEN {'je nastavený' if token else 'nepoužije sa'}")
 
     ok_demo = check("DEMO", True, cid, secret, token)
     ok_live = check("LIVE", False, cid, secret, token)
