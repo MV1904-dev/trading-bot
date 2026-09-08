@@ -198,6 +198,10 @@ class CTraderBot:
         self.auto_paused = False
         self.last_md_ts = time.time()
         self._gap_alarmed = False
+        # Koľkokrát po sebe zlyhala príprava Supabase snapshotu.
+        # Pri zlyhaní ostane v zrkadle posledný dobrý snapshot,
+        # takže bez tohto počítadla to nemá kto ohlásiť.
+        self._snap_fail = 0
         self._dd_alarmed = False
         self._last_close_poll = 0.0
         self._snap_day = ""
@@ -1012,7 +1016,12 @@ class CTraderBot:
             }
             self._capital_ts = time.time()
             self._check_swap_drift(self._capital)
-            self._apply_swap_regime(self._capital)
+            try:
+                self._apply_swap_regime(self._capital)
+            except Exception:  # noqa: BLE001
+                # Automatika krokov je nadstavba. Keby padla, nesmie vziať
+                # so sebou celý snapshot — kroky ostanú na poslednom stave.
+                log.exception("Swapová automatika krokov zlyhala")
         except CTraderError as exc:
             log.warning("Kapitál/swap sa nepodarilo načítať: %s", exc)
         return self._capital
@@ -1353,6 +1362,9 @@ class CTraderBot:
             snap = {
                 "state": {
                     "running": True,
+                    # Čas prípravy dát. push() z toho robí
+                    # updated_at — heartbeat_at je len "proces žije".
+                    "data_at": _iso_utc(time.time()),
                     "paused": self.paused_until > time.time(),
                     "paused_until": _iso_utc(self.paused_until)
                                     if self.paused_until else None,
@@ -1383,18 +1395,43 @@ class CTraderBot:
             }
             with self._sync_lock:
                 self._sync_snap = snap
-        except Exception:  # noqa: BLE001 — zrkadlo nesmie zhodiť obchodovanie
-            log.exception("Príprava Supabase snapshotu zlyhala")
+            recovered, self._snap_fail = self._snap_fail, 0
+        except Exception as exc:  # noqa: BLE001 — zrkadlo nesmie zhodiť obchodovanie
+            # Pri zlyhaní ostane v zrkadle POSLEDNÝ DOBRÝ snapshot a push
+            # vlákno ho ďalej odosiela. Dashboard tak ukazoval zamrznuté
+            # pozície s čerstvým heartbeatom a refresh nič nezmenil.
+            # Preto: TG alarm raz + updated_at ostane na starom čase.
+            self._snap_fail += 1
+            log.exception("Príprava Supabase snapshotu zlyhala (%d× po sebe)",
+                          self._snap_fail)
+            # Nový stĺpec do bot_state zámerne nepridávame — schéma je
+            # v Supabase vytvorená ručne a neznámy stĺpec by zhodil celý
+            # upsert. Zamrznutý stav prezradí updated_at, ktoré ostane
+            # na čase posledných dobrých dát (push ho už neprepečiatkuje).
+            if self._snap_fail == 1:
+                self.tg.send(
+                    "🚨 Dáta pre dashboard sa nepodarilo pripraviť — "
+                    "zobrazuje POSLEDNÝ ZNÁMY stav, nie aktuálny.\n"
+                    f"<code>{html.escape(f'{type(exc).__name__}: {exc}')}</code>")
+                self.db.log_event("alarm", f"snapshot zlyhal: {exc}")
+            return
+        # Oznámenie až po try — chyba Telegramu nesmie vyzerať ako zlyhanie
+        # snapshotu (a znovu spustiť alarm o zamrznutých dátach).
+        if recovered:
+            self.tg.send(f"✅ Dáta v dashboarde sa opäť obnovujú "
+                         f"(po {recovered} zlyhaniach prípravy).")
 
     def _config_dict(self) -> dict:
         c = self.cfg
         return {
             "symbol": c.SYMBOL, "qty": c.QTY,
-            # živé hodnoty zo stratégie — swapová automatika ich mení za behu
+            # živé hodnoty zo stratégie — swapová automatika ich mení za behu.
+            # getattr, lebo vypínače strán pribudli neskôr než zvyšok:
+            # chýbajúce pole nesmie zhodiť celú prípravu snapshotu.
             "step_short": self.strategy.cfg.step_short,
             "step_long": self.strategy.cfg.step_long,
-            "short_enabled": self.strategy.cfg.short_enabled,
-            "long_enabled": self.strategy.cfg.long_enabled,
+            "short_enabled": getattr(self.strategy.cfg, "short_enabled", True),
+            "long_enabled": getattr(self.strategy.cfg, "long_enabled", True),
             "tp_pct": self.strategy.cfg.tp_pct,
             "band_low": self.strategy.cfg.band_low,
             "band_high": self.strategy.cfg.band_high,

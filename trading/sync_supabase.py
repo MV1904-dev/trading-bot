@@ -167,8 +167,12 @@ class SupabaseSync:
         state = dict(snap.get("state") or {})
         state["id"] = self.bot_id
         state["env"] = self.env
+        # heartbeat_at = "push vlákno žije", updated_at = "KEDY VZNIKLI DÁTA".
+        # Kým sa obe pečiatkovali časom pushu, zamrznutý snapshot (obchodné
+        # vlákno padlo v príprave) odchádzal donekonečna s čerstvým časom —
+        # dashboard tvrdil, že je aktuálny, a refresh nič nezmenil.
         state["heartbeat_at"] = _iso(time.time())
-        state["updated_at"] = _iso(time.time())
+        state["updated_at"] = state.pop("data_at", None) or _iso(time.time())
         self._upsert("bot_state", [state], on_conflict="env,id")
 
         positions = [dict(p, env=self.env) for p in snap.get("positions") or []]
