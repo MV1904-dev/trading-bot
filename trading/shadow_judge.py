@@ -82,8 +82,14 @@ class ShadowJudge:
         with self._conn() as con:
             con.executescript(SCHEMA)
         if not self.enabled:
-            log.warning("ShadowJudge: ANTHROPIC_API_KEY chýba — posudky "
-                        "sa nebudú generovať (bot beží normálne).")
+            # Zámerný stav, nie porucha: bez kľúča sudca ticho spí a bot
+            # obchoduje normálne. WARNING pri každom štarte tvrdil opak
+            # a v logu to prekrývalo veci, ktoré naozaj treba riešiť.
+            # _warned rovno hore, nech sa to nezopakuje pri prvom signáli.
+            self._warned = True
+            log.info("ShadowJudge vypnutý (bez ANTHROPIC_API_KEY) — "
+                     "posudky sa negenerujú, obchodovanie tým nie je "
+                     "dotknuté.")
 
     def _conn(self) -> sqlite3.Connection:
         con = sqlite3.connect(self.db_path, timeout=10)
