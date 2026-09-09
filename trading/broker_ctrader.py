@@ -70,9 +70,14 @@ class CTraderBroker:
                  account_id: str, *, refresh_token: str = "",
                  env_path: str = "", demo: bool = True,
                  symbol_name: str = "EURUSD"):
-        if not all([client_id, client_secret, access_token]):
-            raise CTraderError("Chýba CTRADER_CLIENT_ID / CLIENT_SECRET / "
-                               "ACCESS_TOKEN.")
+        # Access token treba až na account auth. Bez account_id sa robí iba
+        # app auth (výpis účtov, diagnostika cudzej aplikácie) a tam by
+        # povinný token znamenal, že sa app auth nedá otestovať samostatne.
+        if not client_id or not client_secret:
+            raise CTraderError("Chýba CTRADER_CLIENT_ID / CLIENT_SECRET.")
+        if account_id and not access_token:
+            raise CTraderError("Chýba CTRADER_ACCESS_TOKEN "
+                               "(je potrebný pre account auth).")
         self.client_id = client_id
         self.client_secret = client_secret
         self.access_token = access_token
@@ -89,6 +94,10 @@ class CTraderBroker:
         self._client: Optional[Client] = None
         self._app_authed = threading.Event()
         self._ready = threading.Event()
+        # Opakovanie auth reťazca (viď _schedule_reauth) — backoff rastie
+        # od 3 s, po úspešnom account authe sa vracia na začiatok.
+        self._auth_backoff = 3.0
+        self._auth_retry_pending = False
         self._bid: Optional[float] = None
         self._ask: Optional[float] = None
         self._spot_ts = 0.0
@@ -195,6 +204,7 @@ class CTraderBroker:
             self._client = None
         self._ready.clear()
         self._app_authed.clear()
+        self._auth_backoff = 3.0
 
     def is_connected(self) -> bool:
         return self._ready.is_set()
@@ -232,7 +242,10 @@ class CTraderBroker:
         if err is not None:
             log.error("App auth zamietnutý: %s %s", err.errorCode,
                       getattr(err, "description", ""))
-            return                     # _ready ostáva dole → connect() to rieši
+            # connect() to ustráži pri PRVOM spojení; po auto-reconnecte
+            # už nikto nečaká, preto si reťazec pýta opakovanie sám.
+            self._schedule_reauth(f"app auth {err.errorCode}")
+            return
         self._app_authed.set()
         if not self.account_id:
             self._ready.set()          # len app auth (výpis účtov)
@@ -259,6 +272,7 @@ class CTraderBroker:
             reactor.callLater(3.0, self._send_account_auth)
             return
         self._ready.set()
+        self._auth_backoff = 3.0
         # po re-connecte treba obnoviť odber spotov (symbol už poznáme)
         if self.symbol_id is not None:
             req = ProtoOASubscribeSpotsReq()
@@ -267,8 +281,42 @@ class CTraderBroker:
             self._client.send(req)
             log.info("Spot odber obnovený po reconnecte.")
 
+    # Strop backoffu. Vyššie nemá zmysel ísť: bot má vlastnú poistku
+    # (dáta mŕtve > HARD_RESTART_S → tvrdý reštart procesu).
+    AUTH_RETRY_MAX_S = 60.0
+
     def _auth_err(self, failure) -> None:
+        """Deferred auth požiadavky zlyhal (typicky timeout SDK po 5 s).
+
+        Predtým sa chyba len zalogovala a reťazec skončil. Spojenie pritom
+        ostalo živé, ale NEAUTORIZOVANÉ: _ready dole, žiadny odber spotov.
+        Keďže _on_connected spúšťa reťazec len pri (re)connecte TCP, nemal
+        ho kto naštartovať znova — bot bežal ďalej s poslednou známou cenou,
+        neotváral vstupy a dashboard ukazoval nemenné pozície.
+        """
         log.error("cTrader auth zlyhal: %s", failure)
+        self._schedule_reauth("deferred zlyhal")
+
+    def _schedule_reauth(self, why: str) -> None:
+        """Naplánuje zopakovanie auth reťazca (beží v reactor vlákne)."""
+        if self._client is None or self._ready.is_set():
+            return
+        if self._auth_retry_pending:
+            return                     # jeden naplánovaný pokus stačí
+        self._auth_retry_pending = True
+        delay, self._auth_backoff = (
+            self._auth_backoff,
+            min(self._auth_backoff * 2, self.AUTH_RETRY_MAX_S))
+        log.warning("Auth reťazec zopakujem o %.0f s (%s).", delay, why)
+        from twisted.internet import reactor
+        reactor.callLater(delay, self._retry_reauth)
+
+    def _retry_reauth(self) -> None:
+        self._auth_retry_pending = False
+        if self._client is None or self._ready.is_set():
+            return
+        self._app_authed.clear()
+        self._reauth_chain()
 
     def _on_disconnected(self, _client, reason) -> None:
         log.warning("cTrader odpojený: %s", reason)
@@ -608,16 +656,40 @@ class CTraderBroker:
         raise CTraderError(
             f"Pozícia {position_id}: potvrdenie zatvorenia neprišlo do 20 s.")
 
+    # Ako pri cash_flow: dlhšie obdobie sa ťahá po týždňoch. Strop drží
+    # slučku konečnou, aj keby prišiel nezmyselne starý timestamp.
+    DEAL_HISTORY_MAX_DAYS = 120
+
     def closed_deals_since(self, ts_ms: int) -> dict:
         """{positionId: {'close_price','gross','swap','commission'}} pre
-        zatvárajúce dealy od ts_ms (peniaze v mene účtu)."""
-        req = ProtoOADealListReq()
-        req.ctidTraderAccountId = self.account_id
-        req.fromTimestamp = ts_ms
-        req.toTimestamp = int(time.time() * 1000)
-        req.maxRows = 500
-        res = self._send(req, timeout=20)
+        zatvárajúce dealy od ts_ms (peniaze v mene účtu).
+
+        API dovolí okno najviac 7 dní na dotaz (INCORRECT_BOUNDARIES), preto
+        sa stránkuje. Jediný dotaz cez dlhšie obdobie zlyhal CELÝ, takže po
+        výpadku dlhšom než týždeň sa pozície doúčtovali odhadom (TP cena,
+        nulový swap aj provízia) namiesto reálneho zatváracieho dealu.
+        """
+        week_ms = 7 * 86_400 * 1000
+        now_ms = int(time.time() * 1000)
+        floor_ms = now_ms - self.DEAL_HISTORY_MAX_DAYS * 86_400 * 1000
+        start = min(max(int(ts_ms), floor_ms), now_ms)
         out = {}
+        while start < now_ms:
+            end = min(start + week_ms, now_ms)
+            req = ProtoOADealListReq()
+            req.ctidTraderAccountId = self.account_id
+            req.fromTimestamp = start
+            req.toTimestamp = end
+            req.maxRows = 500
+            # Zlyhanie okna sa NEprehĺta: volajúci radšej skúsi o 30 s znova,
+            # než by zapísal do histórie odhadnuté čísla.
+            res = self._send(req, timeout=20)
+            self._collect_close_deals(res, out)
+            start = end
+        return out
+
+    @staticmethod
+    def _collect_close_deals(res, out: dict) -> None:
         for d in res.deal:
             cpd = getattr(d, "closePositionDetail", None)
             if cpd is None or not getattr(cpd, "closedVolume", 0):
@@ -634,4 +706,3 @@ class CTraderBroker:
                 # 0,90 — overené na surovom ProtoOADealListRes).
                 "commission": abs(cpd.commission) / 10 ** digits,
             }
-        return out

@@ -198,6 +198,10 @@ class CTraderBot:
         self.auto_paused = False
         self.last_md_ts = time.time()
         self._gap_alarmed = False
+        # Koľkokrát po sebe zlyhala príprava Supabase snapshotu.
+        # Pri zlyhaní ostane v zrkadle posledný dobrý snapshot,
+        # takže bez tohto počítadla to nemá kto ohlásiť.
+        self._snap_fail = 0
         self._dd_alarmed = False
         self._last_close_poll = 0.0
         self._snap_day = ""
@@ -510,13 +514,24 @@ class CTraderBot:
                     "spojenie.", gap)
         self.db.log_event("warn", f"proces zmrazený {gap / 60:.0f} min "
                                   f"(uspatie stroja), reconnect")
+        ok = False
         try:
             self.broker.reconnect()
+            ok = True
             log.info("Spojenie obnovené po prebudení.")
         except Exception as exc:  # noqa: BLE001
             log.warning("Reconnect po prebudení zlyhal: %s", exc)
-        self.last_md_ts = time.time()
         self._last_resub = 0.0
+        # connect() čaká na auth až 45 s (s refreshom tokenu 90 s) a blokuje
+        # slučku. Bez tohto riadku vyzerá ten čas ako ďalšie "zamrznutie"
+        # a _check_suspend sa spustí znova — donekonečna.
+        self._last_loop_ts = time.time()
+        if not ok:
+            # Nulovať last_md_ts po ZLYHANOM reconnecte znamená klamať
+            # watchdog: dáta sú stále mŕtve. Presne takto bot bežal 4 dni
+            # bez jediného alarmu aj tvrdého reštartu, hoci nemal cenu.
+            return
+        self.last_md_ts = time.time()
 
     @staticmethod
     def _market_closed(now: float | None = None) -> bool:
@@ -824,11 +839,15 @@ class CTraderBot:
         if not missing:
             return
         oldest_ms = int(min(r["ts_open"] for r in missing) * 1000)
-        deals = {}
         try:
             deals = self.broker.closed_deals_since(oldest_ms)
-        except CTraderError:
-            pass
+        except CTraderError as exc:
+            # Bez dealov by _finalize_close zapísal ODHAD (cena = TP, nulový
+            # swap aj provízia) a natrvalo. Radšej to nechať otvorené a
+            # skúsiť o 30 s znova — obchod je zatvorený u brokera tak či tak.
+            log.warning("História dealov sa nenačítala (%s) — doúčtovanie "
+                        "odkladám na ďalší pokus.", exc)
+            return
         for row in missing:
             self._finalize_close(row["id"], deals)
 
@@ -1012,7 +1031,12 @@ class CTraderBot:
             }
             self._capital_ts = time.time()
             self._check_swap_drift(self._capital)
-            self._apply_swap_regime(self._capital)
+            try:
+                self._apply_swap_regime(self._capital)
+            except Exception:  # noqa: BLE001
+                # Automatika krokov je nadstavba. Keby padla, nesmie vziať
+                # so sebou celý snapshot — kroky ostanú na poslednom stave.
+                log.exception("Swapová automatika krokov zlyhala")
         except CTraderError as exc:
             log.warning("Kapitál/swap sa nepodarilo načítať: %s", exc)
         return self._capital
@@ -1148,6 +1172,19 @@ class CTraderBot:
         log.info("Grid kroky podľa swapov: short %s (%.2f €/d), "
                  "long %s (%.2f €/d)", step_s, cost_s, step_l, cost_l)
 
+    @staticmethod
+    def _margin_view(used: float, equity: float) -> dict:
+        """Tvar, ktorý ide do stavu bota — a teda do stĺpcov bot_state.
+
+        Jedno miesto zámerne: keď chybová vetva vracala rovno _margin_cache,
+        išiel do stavu aj kľúč "positions" (zoznam pozícií z reconcile).
+        Supabase taký stĺpec v bot_state nemá a CELÝ upsert padol na
+        400 PGRST204 — dashboard potom mesiace ukazoval posledný zapísaný
+        stav a tlačidlo refresh s tým nevedelo nič urobiť.
+        """
+        return {"used_margin": used, "free_margin": equity - used,
+                "margin_level": (equity / used * 100) if used else None}
+
     def _margin_now(self, equity: float, max_age_s: float = 60.0) -> dict:
         """Využitie marže. ProtoOATrader maržu nenesie, takže ju skladáme
         z otvorených pozícií (reconcile vracia usedMargin per pozícia).
@@ -1157,22 +1194,19 @@ class CTraderBot:
         """
         if (time.time() - self._margin_ts <= max_age_s
                 and self._margin_cache):
-            used = self._margin_cache["used_margin"]
-            return {"used_margin": used, "free_margin": equity - used,
-                    "margin_level": (equity / used * 100) if used else None}
+            return self._margin_view(self._margin_cache["used_margin"], equity)
         try:
             plist = self.broker.positions()
             used = sum(p.get("used_margin", 0.0) for p in plist)
         except CTraderError as exc:
+            # Broker mlčí (typicky mŕtve spojenie) — radšej posledná známa
+            # marža než nič, ale VŽDY v tvare pre bot_state.
             log.debug("Maržu sa nepodarilo zistiť: %s", exc)
-            return self._margin_cache or {}
+            return self._margin_view(
+                (self._margin_cache or {}).get("used_margin", 0.0), equity)
         self._margin_ts = time.time()
         self._margin_cache = {"used_margin": used, "positions": plist}
-        return {
-            "used_margin": used,
-            "free_margin": equity - used,
-            "margin_level": (equity / used * 100) if used else None,
-        }
+        return self._margin_view(used, equity)
 
     def _dump_plan_candles(self, max_age_s: float = 6 * 3600) -> None:
         """Odloží H1 a D1 sviečky na disk pre Daily Plan builder.
@@ -1353,6 +1387,9 @@ class CTraderBot:
             snap = {
                 "state": {
                     "running": True,
+                    # Čas prípravy dát. push() z toho robí
+                    # updated_at — heartbeat_at je len "proces žije".
+                    "data_at": _iso_utc(time.time()),
                     "paused": self.paused_until > time.time(),
                     "paused_until": _iso_utc(self.paused_until)
                                     if self.paused_until else None,
@@ -1383,18 +1420,43 @@ class CTraderBot:
             }
             with self._sync_lock:
                 self._sync_snap = snap
-        except Exception:  # noqa: BLE001 — zrkadlo nesmie zhodiť obchodovanie
-            log.exception("Príprava Supabase snapshotu zlyhala")
+            recovered, self._snap_fail = self._snap_fail, 0
+        except Exception as exc:  # noqa: BLE001 — zrkadlo nesmie zhodiť obchodovanie
+            # Pri zlyhaní ostane v zrkadle POSLEDNÝ DOBRÝ snapshot a push
+            # vlákno ho ďalej odosiela. Dashboard tak ukazoval zamrznuté
+            # pozície s čerstvým heartbeatom a refresh nič nezmenil.
+            # Preto: TG alarm raz + updated_at ostane na starom čase.
+            self._snap_fail += 1
+            log.exception("Príprava Supabase snapshotu zlyhala (%d× po sebe)",
+                          self._snap_fail)
+            # Nový stĺpec do bot_state zámerne nepridávame — schéma je
+            # v Supabase vytvorená ručne a neznámy stĺpec by zhodil celý
+            # upsert. Zamrznutý stav prezradí updated_at, ktoré ostane
+            # na čase posledných dobrých dát (push ho už neprepečiatkuje).
+            if self._snap_fail == 1:
+                self.tg.send(
+                    "🚨 Dáta pre dashboard sa nepodarilo pripraviť — "
+                    "zobrazuje POSLEDNÝ ZNÁMY stav, nie aktuálny.\n"
+                    f"<code>{html.escape(f'{type(exc).__name__}: {exc}')}</code>")
+                self.db.log_event("alarm", f"snapshot zlyhal: {exc}")
+            return
+        # Oznámenie až po try — chyba Telegramu nesmie vyzerať ako zlyhanie
+        # snapshotu (a znovu spustiť alarm o zamrznutých dátach).
+        if recovered:
+            self.tg.send(f"✅ Dáta v dashboarde sa opäť obnovujú "
+                         f"(po {recovered} zlyhaniach prípravy).")
 
     def _config_dict(self) -> dict:
         c = self.cfg
         return {
             "symbol": c.SYMBOL, "qty": c.QTY,
-            # živé hodnoty zo stratégie — swapová automatika ich mení za behu
+            # živé hodnoty zo stratégie — swapová automatika ich mení za behu.
+            # getattr, lebo vypínače strán pribudli neskôr než zvyšok:
+            # chýbajúce pole nesmie zhodiť celú prípravu snapshotu.
             "step_short": self.strategy.cfg.step_short,
             "step_long": self.strategy.cfg.step_long,
-            "short_enabled": self.strategy.cfg.short_enabled,
-            "long_enabled": self.strategy.cfg.long_enabled,
+            "short_enabled": getattr(self.strategy.cfg, "short_enabled", True),
+            "long_enabled": getattr(self.strategy.cfg, "long_enabled", True),
             "tp_pct": self.strategy.cfg.tp_pct,
             "band_low": self.strategy.cfg.band_low,
             "band_high": self.strategy.cfg.band_high,
