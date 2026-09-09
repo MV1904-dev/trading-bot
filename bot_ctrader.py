@@ -1460,6 +1460,13 @@ class CTraderBot:
             "tp_pct": self.strategy.cfg.tp_pct,
             "band_low": self.strategy.cfg.band_low,
             "band_high": self.strategy.cfg.band_high,
+            # Kotvy a ATR pre pásmový graf v dashboarde. Zámerne do config
+            # (json stĺpec), nie do stavu — nový stĺpec v bot_state by zhodil
+            # celý upsert na PGRST204, presne ako to spravil kľúč "positions".
+            "ref_long": self.strategy.ref_long,
+            "ref_short": self.strategy.ref_short,
+            "atr": self._atr.get(self.strategy.timeframe_s),
+            "atr_mult": self.strategy.cfg.atr_mult,
             "capacity": f"{c.CAP_BASE}+{c.CAP_RESERVE}",
             "tick_seconds": c.TICK_SECONDS,
             "failsafe_band": c.FAILSAFE_BAND, "s7_enabled": c.S7_ENABLED,

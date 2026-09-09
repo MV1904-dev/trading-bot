@@ -1,5 +1,6 @@
 "use client";
 
+import GridBand from "@/components/GridBand";
 import Hero from "@/components/Hero";
 import PositionList from "@/components/PositionList";
 import DailyPnlTable from "@/components/DailyPnlTable";
@@ -38,6 +39,13 @@ export default function Overview() {
   return (
     <main>
       <Hero state={state} positions={positions} daily={daily} onRefresh={refreshAll} />
+
+      <Section
+        title="Pásmo a najbližšie vstupy"
+        info="Kam musí dôjsť kurz pre najbližší vstup. Spúšť sa počíta od kotvy, ktorá už môže byť prekročená — vtedy vstup padne na najbližšom bare. Slabé značky sú ďalšie úrovne mriežky: po vstupe sa kotva presunie na cenu vstupu, takže ďalšia úroveň je o krok ďalej. Vybledená strana neotvára — buď je za hranou pásma, alebo ju vyplo drahé držanie."
+      >
+        <GridBand state={state} />
+      </Section>
 
       <Section
         title="Pozície"
