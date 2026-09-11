@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { createClient } from "@/lib/supabase";
-import { dateTime, money, pnlClass, price, signed } from "@/lib/format";
+import { dateTime, money, pnlClass, signed } from "@/lib/format";
 import { DataStamp, RefreshButton, Tile } from "@/components/ui";
 import { fxMarketClosed } from "@/lib/market";
 import type { BotState, DailyCycle, Position } from "@/lib/types";
@@ -122,11 +122,6 @@ export default function Hero({
         />
       </div>
 
-      <div className="mt-3 flex items-center gap-2 text-xs text-faint">
-        <span>{state.symbol ?? "EURUSD"}</span>
-        <span className="num text-ink">{price(state.last_price)}</span>
-        <Band state={state} />
-      </div>
 
       {state.blocked_reason && (
         <p className="mt-2 text-xs text-warn">Vstupy blokované: {state.blocked_reason}</p>
@@ -147,22 +142,5 @@ export default function Hero({
       )}
       {msg && <p className="mt-2 text-xs text-muted">{msg}</p>}
     </div>
-  );
-}
-
-function Band({ state }: { state: BotState }) {
-  const lo = state.band_low;
-  const hi = state.band_high;
-  const px = state.last_price;
-  if (lo == null || hi == null || px == null) return null;
-  const pos = ((Math.min(Math.max(px, lo), hi) - lo) / (hi - lo)) * 100;
-  const out = px < lo || px > hi;
-  return (
-    <span className="relative ml-auto h-1 w-24 rounded-full bg-surface">
-      <span
-        className={`absolute top-1/2 h-2.5 w-0.5 -translate-y-1/2 rounded ${out ? "bg-neg" : "bg-pos"}`}
-        style={{ left: `calc(${pos}% - 1px)` }}
-      />
-    </span>
   );
 }
