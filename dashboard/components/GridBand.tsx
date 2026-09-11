@@ -63,7 +63,6 @@ export default function GridBand({ state }: { state: BotState | null }) {
   const stepS = cfg.short_enabled === false ? null : cfg.step_short ?? null;
   const stepL = cfg.long_enabled === false ? null : cfg.step_long ?? null;
 
-  // spúšť z kotvy; ak je prekročená, vstup padne na aktuálnom kurze
   const rawS = stepS == null ? null : refS + refS * stepS;
   const rawL = stepL == null ? null : refL - Math.max(refL * stepL, atrMult * atr);
   const ladS = stepS == null || rawS == null ? []
@@ -76,182 +75,140 @@ export default function GridBand({ state }: { state: BotState | null }) {
   const mainS = idxS >= 0 ? ladS[idxS] : null;
   const mainL = idxL >= 0 ? ladL[idxL] : null;
 
-  // --- mierka ---------------------------------------------------------------
-  // Pásmo má stovky pipov, dianie desiatky. Hlavná os je preto výrez okolo
-  // diania; celé pásmo nesie úzky prúžok nad ním.
-  const W = 900, X0 = 46, X1 = 854, AXIS = 150;
-  const act = [px, ...ladS.map((l) => l.p), ...ladL.map((l) => l.p)];
-  [lo, hi].forEach((e) => { if (Math.abs(e - px) < 0.008) act.push(e); });
-  let min = Math.min(...act), max = Math.max(...act);
-  if (max - min < 0.0026) { const c = (max + min) / 2; min = c - 0.0013; max = c + 0.0013; }
-  const pad = (max - min) * 0.16;
-  min -= pad; max += pad;
+  // --- mierka: kurz je vždy v strede -----------------------------------------
+  // Symetricky okolo kurzu, aby sa dalo od stredu čítať "koľko hore, koľko
+  // dole". Rozsah určuje vzdialenejší z dvoch najbližších vstupov; hranu pásma
+  // priberie, keď je v dosahu, nech je vidieť, kde sa strana vypne.
+  const W = 460, X0 = 24, X1 = 436, AXIS = 104;
+  const dists = [mainS, mainL].filter(Boolean).map((l) => Math.abs(l!.p - px));
+  let half = Math.max(...dists, 0.0006) * 1.7;
+  [lo, hi].forEach((e) => {
+    const d = Math.abs(e - px);
+    if (d < half * 1.5) half = Math.max(half, d * 1.18);
+  });
+  const min = px - half, max = px + half;
   const x = (p: number) => X0 + ((p - min) / (max - min)) * (X1 - X0);
   const inView = (p: number) => p >= min && p <= max;
-
-  const oLo = Math.min(lo, px) - 0.004, oHi = Math.max(hi, px) + 0.004;
-  const ox = (p: number) => X0 + ((p - oLo) / (oHi - oLo)) * (X1 - X0);
-
-  const span = max - min;
-  const tick = span > 0.02 ? 0.005 : span > 0.008 ? 0.002 : 0.0005;
-  const ticks: number[] = [];
-  for (let p = Math.ceil(min / tick) * tick; p <= max; p += tick) ticks.push(p);
 
   const bandX0 = inView(lo) ? x(lo) : lo < min ? X0 : null;
   const bandX1 = inView(hi) ? x(hi) : hi > max ? X1 : null;
 
   const sides = [
-    { lad: ladS, main: mainS, idx: idxS, color: "var(--short)", label: "short",
-      on: stepS != null },
-    { lad: ladL, main: mainL, idx: idxL, color: "var(--long)", label: "long",
-      on: stepL != null },
+    { lad: ladS, main: mainS, idx: idxS, color: "var(--short)", label: "short", on: stepS != null },
+    { lad: ladL, main: mainL, idx: idxL, color: "var(--long)", label: "long", on: stepL != null },
   ];
 
-  const where = px > hi ? "nad pásmom" : px < lo ? "pod pásmom" : "v pásme";
-  const verdict =
-    mainS && mainL ? "V pásme — čaká na obchod"
-    : !mainS && !mainL ? "Neotvára nič"
-    : `Jednostranne — otvára len ${mainS ? "short" : "long"}y`;
+  const rows: [string, string][] = [
+    ["Otvorí short pri", stepS == null ? "vypnutý — drahé držanie"
+      : !mainS ? "za hranou pásma"
+      : pipsTo(mainS.p, px) === 0 ? "hneď"
+      : `${fmtPrice(mainS.p)} · ${pips(pipsTo(mainS.p, px))} vyššie`],
+    ["Otvorí long pri", stepL == null ? "vypnutý — drahé držanie"
+      : !mainL ? `až pod ${p4(hi)}`
+      : pipsTo(mainL.p, px) === 0 ? "hneď"
+      : `${fmtPrice(mainL.p)} · ${pips(pipsTo(mainL.p, px))} nižšie`],
+    ["Horná hrana", `${p4(hi)} · ${pips(pipsTo(hi, px))} ${hi >= px ? "nad" : "pod"}`],
+    ["Dolná hrana", `${p4(lo)} · ${pips(pipsTo(lo, px))} ${lo >= px ? "nad" : "pod"}`],
+    ["Ďalšie short úrovne", ladS.length > 1 ? ladS.slice(1).map((l) => fmtPrice(l.p)).join(" · ") : "—"],
+    ["Ďalšie long úrovne", ladL.length > 1 ? ladL.slice(1).map((l) => fmtPrice(l.p)).join(" · ") : "—"],
+  ];
 
   return (
-    <div className="flex flex-col gap-3">
-      <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-        <span className="text-sm font-medium">{verdict}</span>
-        <span className="text-xs text-faint">
-          kurz {fmtPrice(px)} · {where} · pásmo {p4(lo)}–{p4(hi)}
-        </span>
-      </div>
-
-      <div className="overflow-x-auto">
-        <svg viewBox={`0 0 ${W} 262`} className="block h-auto w-full min-w-[560px]"
-             role="img" aria-label="Kurz a najbližšie vstupné úrovne gridu">
-          {/* prehľadový prúžok: celé pásmo */}
-          <rect x={X0} y={30} width={X1 - X0} height={15} fill="var(--hair)" rx={2} />
-          <rect x={ox(lo)} y={30} width={Math.max(0, ox(hi) - ox(lo))} height={15}
+    <div className="flex flex-col gap-2">
+      <svg viewBox={`0 0 ${W} 200`} className="block h-auto w-full"
+           role="img" aria-label="Kurz a najbližšie vstupné úrovne gridu">
+        {/* pásmo */}
+        {bandX0 != null && bandX1 != null && bandX1 > bandX0 && (
+          <rect x={bandX0} y={AXIS - 26} width={bandX1 - bandX0} height={26}
                 fill="var(--surface)" />
-          {[lo, hi].map((e) => (
-            <line key={e} x1={ox(e)} y1={30} x2={ox(e)} y2={45}
-                  stroke="var(--line)" strokeWidth={1.5} />
-          ))}
-          <line x1={ox(px)} y1={25} x2={ox(px)} y2={50} stroke="var(--ink)" strokeWidth={2.5} />
-          <rect x={ox(Math.max(min, oLo))} y={27}
-                width={Math.max(2, ox(Math.min(max, oHi)) - ox(Math.max(min, oLo)))}
-                height={21} fill="none" stroke="var(--line)" strokeWidth={1}
-                strokeDasharray="3 3" />
-          <text x={X0} y={20} fill="var(--faint)" fontSize={11}>
-            celé pásmo · {p4(lo)} – {p4(hi)}
-          </text>
-          <text x={X1} y={20} textAnchor="end" fill="var(--faint)" fontSize={11}>
-            prerušovane = výrez dole
-          </text>
-
-          {/* pásmo vo výreze */}
-          {bandX0 != null && bandX1 != null && bandX1 > bandX0 && (
-            <rect x={bandX0} y={AXIS - 30} width={bandX1 - bandX0} height={30}
-                  fill="var(--surface)" />
-          )}
-          {([[lo, "dolná hrana"], [hi, "horná hrana"]] as [number, string][])
-            .filter(([p]) => inView(p))
-            .map(([p, lab]) => (
-              <g key={lab}>
-                <line x1={x(p)} y1={AXIS - 34} x2={x(p)} y2={AXIS}
-                      stroke="var(--line)" strokeWidth={2} />
-                <text x={x(p) + 5} y={AXIS - 38} fill="var(--muted)" fontSize={11}>
-                  {lab} {p4(p)}
-                </text>
-              </g>
-            ))}
-
-          {/* os */}
-          <line x1={X0} y1={AXIS} x2={X1} y2={AXIS} stroke="var(--line)" strokeWidth={1} />
-          {ticks.map((p) => (
-            <g key={p}>
-              <line x1={x(p)} y1={AXIS} x2={x(p)} y2={AXIS + 5}
-                    stroke="var(--line)" strokeWidth={1} />
-              <text x={x(p)} y={AXIS + 20} textAnchor="middle" fill="var(--faint)"
-                    fontSize={11} className="tabular-nums">
-                {fmtPrice(p)}
+        )}
+        {([[lo, "dolná hrana"], [hi, "horná hrana"]] as [number, string][])
+          .filter(([p]) => inView(p))
+          .map(([p, lab]) => (
+            <g key={lab}>
+              <line x1={x(p)} y1={AXIS - 30} x2={x(p)} y2={AXIS}
+                    stroke="var(--line)" strokeWidth={2} />
+              <text x={x(p)} y={AXIS - 36} textAnchor="middle"
+                    fill="var(--faint)" fontSize={11}>
+                {lab} {p4(p)}
               </text>
             </g>
           ))}
 
-          {/* úrovne mriežky: popísaná je tá, ktorá naozaj otvorí */}
-          {sides.map((s) =>
-            s.lad.filter((l) => inView(l.p)).map((l, i) => {
-              const isMain = s.on && s.idx >= 0 ? l === s.main : i === 0;
-              const live = s.on && l.allowed;
-              const op = live ? (isMain ? 1 : 0.5) : 0.3;
-              const d = pipsTo(l.p, px);
-              return (
-                <g key={`${s.label}-${l.p}`}>
-                  <line x1={x(l.p)} y1={AXIS - (isMain ? 30 : 16)}
-                        x2={x(l.p)} y2={AXIS + (isMain ? 34 : 14)}
-                        stroke={s.color} strokeWidth={isMain ? 2 : 1.5}
-                        strokeDasharray="5 4" strokeOpacity={op} />
-                  {isMain && (
-                    <>
-                      <text x={x(l.p)} y={AXIS + 56} textAnchor="middle"
-                            fill={live ? "var(--ink)" : "var(--faint)"}
-                            fontSize={12.5} fontWeight={live ? 500 : 400}
-                            className="tabular-nums">
-                        {s.label} {fmtPrice(l.p)}
-                      </text>
-                      <text x={x(l.p)} y={AXIS + 71} textAnchor="middle"
-                            fill="var(--faint)" fontSize={11}>
-                        {!s.on ? "strana vypnutá — drahé držanie"
-                          : !l.allowed ? "až za hranou pásma"
-                          : d === 0 ? "spustí sa hneď"
-                          : `${pips(d)} ${l.p > px ? "vyššie" : "nižšie"}`}
-                      </text>
-                    </>
-                  )}
-                </g>
-              );
-            }),
-          )}
+        <line x1={X0} y1={AXIS} x2={X1} y2={AXIS} stroke="var(--line)" strokeWidth={1} />
 
-          {/* kurz */}
-          <line x1={x(px)} y1={AXIS - 52} x2={x(px)} y2={AXIS}
-                stroke="var(--ink)" strokeWidth={2.5} />
-          <circle cx={x(px)} cy={AXIS} r={4.5} fill="var(--ink)"
-                  stroke="var(--bg)" strokeWidth={2} />
-          <text x={x(px)} y={AXIS - 60} fill="var(--ink)" fontSize={14} fontWeight={600}
-                className="tabular-nums"
-                textAnchor={x(px) > X1 - 90 ? "end" : x(px) < X0 + 90 ? "start" : "middle"}>
-            kurz {fmtPrice(px)}
+        {/* úrovne mriežky — popísaná je tá, ktorá naozaj otvorí */}
+        {sides.map((s) =>
+          s.lad.filter((l) => inView(l.p)).map((l, i) => {
+            const isMain = s.on && s.idx >= 0 ? l === s.main : i === 0;
+            const live = s.on && l.allowed;
+            const op = live ? (isMain ? 1 : 0.45) : 0.3;
+            const d = pipsTo(l.p, px);
+            return (
+              <g key={`${s.label}-${l.p}`}>
+                <line x1={x(l.p)} y1={AXIS - (isMain ? 26 : 13)}
+                      x2={x(l.p)} y2={AXIS + (isMain ? 26 : 12)}
+                      stroke={s.color} strokeWidth={isMain ? 2 : 1.5}
+                      strokeDasharray="5 4" strokeOpacity={op} />
+                {isMain && (
+                  <>
+                    <text x={x(l.p)} y={AXIS + 46} textAnchor="middle"
+                          fill={live ? "var(--ink)" : "var(--faint)"}
+                          fontSize={13} fontWeight={live ? 500 : 400}
+                          className="tabular-nums">
+                      {s.label} {fmtPrice(l.p)}
+                    </text>
+                    <text x={x(l.p)} y={AXIS + 62} textAnchor="middle"
+                          fill="var(--faint)" fontSize={11}>
+                      {!s.on ? "strana vypnutá"
+                        : !l.allowed ? "až za hranou pásma"
+                        : d === 0 ? "spustí sa hneď"
+                        : `${pips(d)} ${l.p > px ? "vyššie" : "nižšie"}`}
+                    </text>
+                  </>
+                )}
+              </g>
+            );
+          }),
+        )}
+
+        {/* kurz — vždy v strede */}
+        <line x1={x(px)} y1={AXIS - 44} x2={x(px)} y2={AXIS}
+              stroke="var(--ink)" strokeWidth={2.5} />
+        <circle cx={x(px)} cy={AXIS} r={4.5} fill="var(--ink)"
+                stroke="var(--bg)" strokeWidth={2} />
+        <text x={x(px)} y={AXIS - 52} textAnchor="middle" fill="var(--ink)"
+              fontSize={15} fontWeight={600} className="tabular-nums">
+          {fmtPrice(px)}
+        </text>
+
+        {/* hrany, ktoré sa do výrezu nezmestili */}
+        {[
+          !inView(hi) && `horná hrana ${p4(hi)} je ${pips(pipsTo(hi, px))} ${hi > px ? "nad" : "pod"}`,
+          !inView(lo) && `dolná hrana ${p4(lo)} je ${pips(pipsTo(lo, px))} ${lo > px ? "nad" : "pod"}`,
+        ].filter(Boolean).map((t, i) => (
+          <text key={i} x={X0} y={182 + i * 14} fill="var(--faint)" fontSize={11}>
+            {t}
           </text>
-
-          {/* hrany, ktoré sa do výrezu nezmestili */}
-          {[
-            !inView(hi) && `horná hrana ${p4(hi)} je ${pips(pipsTo(hi, px))} ${hi > px ? "nad" : "pod"} kurzom`,
-            !inView(lo) && `dolná hrana ${p4(lo)} je ${pips(pipsTo(lo, px))} ${lo > px ? "nad" : "pod"} kurzom`,
-          ].filter(Boolean).map((t, i) => (
-            <text key={i} x={X0} y={244 + i * 15} fill="var(--faint)" fontSize={11}>
-              {t}
-            </text>
-          ))}
-        </svg>
-      </div>
-
-      <dl className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs sm:grid-cols-4">
-        {([
-          ["Otvorí short pri", stepS == null ? "vypnutý — drahé držanie"
-            : !mainS ? "za hranou pásma"
-            : pipsTo(mainS.p, px) === 0 ? "hneď"
-            : `${fmtPrice(mainS.p)} · ${pips(pipsTo(mainS.p, px))} vyššie`],
-          ["Otvorí long pri", stepL == null ? "vypnutý — drahé držanie"
-            : !mainL ? `až pod ${p4(hi)}`
-            : pipsTo(mainL.p, px) === 0 ? "hneď"
-            : `${fmtPrice(mainL.p)} · ${pips(pipsTo(mainL.p, px))} nižšie`],
-          ["Horná hrana", `${p4(hi)} · ${pips(pipsTo(hi, px))} ${hi >= px ? "nad" : "pod"}`],
-          ["Dolná hrana", `${p4(lo)} · ${pips(pipsTo(lo, px))} ${lo >= px ? "nad" : "pod"}`],
-        ] as [string, string][]).map(([k, v]) => (
-          <div key={k}>
-            <dt className="text-faint">{k}</dt>
-            <dd className="tabular-nums">{v}</dd>
-          </div>
         ))}
-      </dl>
+      </svg>
+
+      <details className="group">
+        <summary className="cursor-pointer list-none text-xs text-faint
+                            hover:text-muted">
+          Úrovne a hrany pásma
+          <span className="ml-1 inline-block transition-transform
+                           group-open:rotate-90">›</span>
+        </summary>
+        <dl className="mt-2 grid grid-cols-2 gap-x-4 gap-y-2 text-xs">
+          {rows.map(([k, v]) => (
+            <div key={k}>
+              <dt className="text-faint">{k}</dt>
+              <dd className="tabular-nums">{v}</dd>
+            </div>
+          ))}
+        </dl>
+      </details>
     </div>
   );
 }
