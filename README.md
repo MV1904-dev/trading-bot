@@ -1,5 +1,9 @@
 # Trading bot – XTB xAPI (demo)
 
+> **Toto je starší XTB prototyp.** Dnes obchoduje cTrader bot
+> (`bot_ctrader.py`) s dashboardom v `dashboard/`. Ako to beží, kde sa
+> nasadzuje a čo robiť pri poruche → **[docs/prevadzka.md](docs/prevadzka.md)**.
+
 Sada Python skriptov na prácu s obchodnou platformou **XTB** cez jej rozhranie
 [xAPI](http://developers.xstore.pro/documentation/). Projekt pokrýva celý reťazec
 od overenia pripojenia, cez testovací obchod na demo účte, až po samostatný modul
