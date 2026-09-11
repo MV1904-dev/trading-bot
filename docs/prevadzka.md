@@ -12,7 +12,7 @@
 | Časť | Kde | Ako sa spúšťa |
 |---|---|---|
 | **Bot** (`bot_ctrader.py`) | server Hetzner, `62.238.48.134`, používateľ `marian`, priečinok `/home/marian/trading-bot` | systemd služba `ctrader-bot` (viď `scripts/ctrader-bot.service`) |
-| **Daily Plan** | ten istý server | `ctrader-plan.timer`, denne 21:35 UTC (Ne–Št) |
+| **Daily Plan** | ten istý server | `ctrader-plan.timer`, denne 21:35 UTC (Ne–Št); beží ďalej, ale v dashboarde sa už nezobrazuje — plány končia v Supabase a v Telegrame |
 | **Dashboard** (`dashboard/`) | Vercel, projekt `trading-bot-dashboard` | automaticky pri každom pushi do `main` |
 | **Databáza pre dashboard** | Supabase | — |
 | **Notifikácie a príkazy** | Telegram | bot posiela sám; príkazy `/stav`, `/vstup`, `/pauza` |
