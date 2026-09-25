@@ -3,12 +3,11 @@
 import GridBand from "@/components/GridBand";
 import Hero from "@/components/Hero";
 import PositionList from "@/components/PositionList";
-import DailyPnlTable from "@/components/DailyPnlTable";
 import { Section } from "@/components/ui";
 import { useLive } from "@/lib/useLive";
 import { useEnv } from "@/lib/env";
 import { money, signed } from "@/lib/format";
-import type { BotState, DailyCycle, Position, Trade } from "@/lib/types";
+import type { BotState, DailyCycle, Position } from "@/lib/types";
 
 export default function Overview() {
   const { env } = useEnv();
@@ -24,11 +23,7 @@ export default function Overview() {
     q.select("*").eq("env", env).order("day", { ascending: false }).limit(400),
     [env],
   );
-  const { rows: trades, reload: r4 } = useLive<Trade>("trades", (q) =>
-    q.select("*").eq("env", env).order("closed_at", { ascending: false }).limit(500),
-    [env],
-  );
-  const refreshAll = () => { r1(); r2(); r3(); r4(); };
+  const refreshAll = () => { r1(); r2(); r3(); };
 
   const state = states[0] ?? null;
   const swapRatio =
@@ -39,21 +34,6 @@ export default function Overview() {
   return (
     <main>
       <Hero state={state} positions={positions} daily={daily} onRefresh={refreshAll} />
-
-      <Section
-        title="Pásmo a najbližšie vstupy"
-        info="Kam musí dôjsť kurz pre najbližší vstup. Spúšť sa počíta od kotvy, ktorá už môže byť prekročená — vtedy vstup padne na najbližšom bare. Slabé značky sú ďalšie úrovne mriežky: po vstupe sa kotva presunie na cenu vstupu, takže ďalšia úroveň je o krok ďalej. Vybledená strana neotvára — buď je za hranou pásma, alebo ju vyplo drahé držanie."
-      >
-        <GridBand state={state} />
-      </Section>
-
-      <Section
-        title="Pozície"
-        meta={positions.length ? `${positions.length} otvorených` : undefined}
-        info="Vek nad 3 dni je žltý, nad 7 dní červený — grid má cykly v hodinách, čo visí dni, drží kapitál a platí swap. Klepnutím na riadok sa rozbalí TP, swap za držanie a zatvorenie."
-      >
-        <PositionList positions={positions} limit={4} />
-      </Section>
 
       <Section
         title="Kapitál"
@@ -84,10 +64,18 @@ export default function Overview() {
       </Section>
 
       <Section
-        title="Denný P/L"
-        info="Len dni so zavretým obchodom, podľa UTC dátumu zavretia. Riadok dňa sa dá rozkliknúť na jednotlivé zrealizované obchody; kumulatív beží od najstaršieho zobrazeného dňa."
+        title="Pásmo a najbližšie vstupy"
+        info="Kam musí dôjsť kurz pre najbližší vstup. Spúšť sa počíta od kotvy, ktorá už môže byť prekročená — vtedy vstup padne na najbližšom bare. Slabé značky sú ďalšie úrovne mriežky: po vstupe sa kotva presunie na cenu vstupu, takže ďalšia úroveň je o krok ďalej. Vybledená strana neotvára — buď je za hranou pásma, alebo ju vyplo drahé držanie."
       >
-        <DailyPnlTable daily={daily} trades={trades} />
+        <GridBand state={state} />
+      </Section>
+
+      <Section
+        title="Pozície"
+        meta={positions.length ? `${positions.length} otvorených` : undefined}
+        info="Vek nad 3 dni je žltý, nad 7 dní červený — grid má cykly v hodinách, čo visí dni, drží kapitál a platí swap. Klepnutím na riadok sa rozbalí TP, swap za držanie a zatvorenie."
+      >
+        <PositionList positions={positions} />
       </Section>
     </main>
   );

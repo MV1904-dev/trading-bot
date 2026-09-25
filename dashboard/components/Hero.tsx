@@ -42,6 +42,9 @@ export default function Hero({
   const equity = state.equity ?? state.balance ?? 0;
   const deposits = state.deposits_net ?? 0;
   const roi = deposits > 0 ? ((equity - deposits) / deposits) * 100 : null;
+  // balance je hotovosť na účte (vklady + všetko zavreté), nie zisk. Sama
+  // o sebe nič nehovorí — zaujíma nás, koľko z nej stratégia zarobila.
+  const realized = state.balance == null ? null : state.balance - deposits;
 
   const today = new Date().toISOString().slice(0, 10);
   const todayRows = daily.filter((d) => d.day === today);
@@ -103,7 +106,8 @@ export default function Hero({
         )}
       </div>
       <p className="mt-1 text-xs text-faint">
-        vklad {money(deposits)} · realizovaná {money(state.balance)}
+        vklad {money(deposits)} · realizovaný zisk{" "}
+        <span className={pnlClass(realized)}>{signed(realized)}</span>
       </p>
 
       <div className="mt-3 grid grid-cols-3 gap-2">
