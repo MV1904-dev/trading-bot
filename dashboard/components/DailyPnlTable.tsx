@@ -18,10 +18,10 @@ import type { DailyCycle, Trade } from "@/lib/types";
 
 type Bucket = "day" | "week" | "month";
 
-const BUCKETS: { id: Bucket; label: string; days: number; unit: string }[] = [
-  { id: "day", label: "Dni", days: 30, unit: "dní" },
-  { id: "week", label: "Týždne", days: 182, unit: "týždňov" },
-  { id: "month", label: "Mesiace", days: 730, unit: "mesiacov" },
+const BUCKETS: { id: Bucket; label: string; unit: string }[] = [
+  { id: "day", label: "Dni", unit: "dní" },
+  { id: "week", label: "Týždne", unit: "týždňov" },
+  { id: "month", label: "Mesiace", unit: "mesiacov" },
 ];
 
 /** Pondelok týždňa, do ktorého dátum patrí (ISO týždeň, v UTC). */
@@ -76,13 +76,11 @@ export default function DailyPnlTable({
 }) {
   const [bucket, setBucket] = useState<Bucket>("day");
   const spec = BUCKETS.find((b) => b.id === bucket)!;
-  const cutoff = Date.now() - spec.days * 86_400_000;
 
   // dni najprv zosumarizujeme samostatne — týždeň a mesiac sa z nich
   // poskladajú a zároveň ich potrebujeme do rozkliku
   const byDay = new Map<string, { pnl: number; cycles: number }>();
   for (const d of daily) {
-    if (new Date(`${d.day}T00:00:00Z`).getTime() < cutoff) continue;
     const cur = byDay.get(d.day) ?? { pnl: 0, cycles: 0 };
     cur.pnl += Number(d.pnl_usd) || 0;
     cur.cycles += d.cycles || 0;
