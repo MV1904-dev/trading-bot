@@ -44,7 +44,11 @@ export default function Hero({
   const roi = deposits > 0 ? ((equity - deposits) / deposits) * 100 : null;
   // balance je hotovosť na účte (vklady + všetko zavreté), nie zisk. Sama
   // o sebe nič nehovorí — zaujíma nás, koľko z nej stratégia zarobila.
-  const realized = state.balance == null ? null : state.balance - deposits;
+  // Vyčísliť sa to dá len proti vkladom: demo archív ich hlási ako 0
+  // (cash_flow k nemu nič nevracia) a balance − 0 by vyzeralo, akoby bol
+  // celý zostatok zarobený. Bez vkladov preto zisk neukazujeme vôbec.
+  const realized =
+    deposits > 0 && state.balance != null ? state.balance - deposits : null;
 
   const today = new Date().toISOString().slice(0, 10);
   const todayRows = daily.filter((d) => d.day === today);
@@ -106,8 +110,14 @@ export default function Hero({
         )}
       </div>
       <p className="mt-1 text-xs text-faint">
-        vklad {money(deposits)} · realizovaný zisk{" "}
-        <span className={pnlClass(realized)}>{signed(realized)}</span>
+        {realized != null ? (
+          <>
+            vklad {money(deposits)} · realizovaný zisk{" "}
+            <span className={pnlClass(realized)}>{signed(realized)}</span>
+          </>
+        ) : (
+          <>zostatok {money(state.balance)} · bez údaja o vkladoch sa zisk nedá vyčísliť</>
+        )}
       </p>
 
       <div className="mt-3 grid grid-cols-3 gap-2">
