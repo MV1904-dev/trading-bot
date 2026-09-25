@@ -38,13 +38,13 @@ export default function Overview() {
 
       <Section
         title="Kapitál"
-        info="Marža pod 200 % je žltá, pod 100 % červená; broker začne zatvárať pozície sám pri 50 %. Swap otvorených = naakumulovaný náklad za držanie otvorených pozícií cez noc, priamo z brokera."
+        info="Marža pod 200 % je žltá, pod 100 % červená; broker začne zatvárať pozície sám pri 50 %. Swap = naakumulovaný náklad za držanie otvorených pozícií cez noc, priamo z brokera. Long vs short = koľkokrát drahšia je drahšia strana."
       >
         {/* Využitá marža je len equity − voľná; dala sa dopočítať z dvoch
             čísel, ktoré už na stránke sú, tak zabrala dlaždicu zbytočne. */}
         <div className="grid grid-cols-3 gap-2">
           <Tile label="Voľná marža" value={money(state?.free_margin)} />
-          <Tile label="Swap otvorených" value={signed(openSwap)} tone={pnlClass(openSwap)} />
+          <Tile label="Swap" value={signed(openSwap)} tone={pnlClass(openSwap)} />
           <Tile
             label="Long vs short"
             value={swapRatio == null ? "—" : `${swapRatio.toFixed(0)}×`}
