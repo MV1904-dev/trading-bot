@@ -36,7 +36,7 @@ function EnvToggle() {
     len prezerajú, nevyžadujú dennú akciu, tak idú pod „ďalšie". */
 const MAIN = [
   { href: "/", label: "Prehľad", icon: HomeIcon },
-  { href: "/positions", label: "Pozície", icon: LayersIcon },
+  { href: "/pnl", label: "P/L", icon: ChartIcon },
   { href: "/calendar", label: "Kalendár", icon: CalendarIcon },
 ];
 const MORE = [
@@ -147,8 +147,8 @@ const S = {
 function HomeIcon() {
   return <svg {...S}><path d="M3 10.5 12 3l9 7.5" /><path d="M5 10v10h14V10" /></svg>;
 }
-function LayersIcon() {
-  return <svg {...S}><path d="M12 3 3 8l9 5 9-5-9-5Z" /><path d="m3 14 9 5 9-5" /></svg>;
+function ChartIcon() {
+  return <svg {...S}><path d="M4 20V10M10 20V4M16 20v-7M22 20H2" /></svg>;
 }
 function ClockIcon() {
   return <svg {...S}><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" /></svg>;
