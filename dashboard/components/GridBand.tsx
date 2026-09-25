@@ -1,6 +1,7 @@
 "use client";
 
 import { price as fmtPrice } from "@/lib/format";
+import { Tile } from "@/components/ui";
 import type { BotState } from "@/lib/types";
 
 /**
@@ -79,7 +80,7 @@ export default function GridBand({ state }: { state: BotState | null }) {
   // Symetricky okolo kurzu, aby sa dalo od stredu čítať "koľko hore, koľko
   // dole". Rozsah určuje vzdialenejší z dvoch najbližších vstupov; hranu pásma
   // priberie, keď je v dosahu, nech je vidieť, kde sa strana vypne.
-  const W = 460, X0 = 24, X1 = 436, AXIS = 104;
+  const W = 460, H = 76, X0 = 24, X1 = 436, AXIS = 50;
   const dists = [mainS, mainL].filter(Boolean).map((l) => Math.abs(l!.p - px));
   let half = Math.max(...dists, 0.0006) * 1.7;
   [lo, hi].forEach((e) => {
@@ -113,88 +114,77 @@ export default function GridBand({ state }: { state: BotState | null }) {
     ["Ďalšie long úrovne", ladL.length > 1 ? ladL.slice(1).map((l) => fmtPrice(l.p)).join(" · ") : "—"],
   ];
 
+  // Popisky strán sú dlaždice pod grafom, nie text v SVG — v grafe ostali
+  // len značky. Vysvetlenie, čo ktorá znamená, je pod "i" v hlavičke sekcie.
+  const tiles = ([
+    ["Long vstup", stepL, mainL, "nižšie", `až pod ${p4(hi)}`, "text-long"],
+    ["Short vstup", stepS, mainS, "vyššie", "až za hranou pásma", "text-short"],
+  ] as const).map(([label, step, main, dir, blocked, color]) => {
+    const d = main ? pipsTo(main.p, px) : 0;
+    return {
+      label,
+      value: step == null || !main ? "—" : fmtPrice(main.p),
+      sub: step == null ? "strana vypnutá"
+        : !main ? blocked
+        : d === 0 ? "spustí sa hneď"
+        : `${pips(d)} ${dir}`,
+      tone: step != null && main ? color : "text-faint",
+    };
+  });
+
   return (
-    // SVG má pevný viewBox 460×200, takže s w-full rástlo do výšky spolu so
-    // šírkou okna — na desktope z neho bolo 300 px a všetky popisky sa
-    // úmerne nafúkli. Strop na 460 px ho drží v mierke, v akej je kreslený.
-    <div className="mx-auto flex w-full max-w-[460px] flex-col gap-2">
-      <svg viewBox={`0 0 ${W} 200`} className="block h-auto w-full"
+    // Strop šírky je na samotnom SVG, nie na celej sekcii: graf má pevný
+    // viewBox, takže by s w-full rástol aj do výšky, ale dlaždice pod ním
+    // majú ostať v jednej línii s ostatnými dlaždicami na stránke.
+    <div className="flex w-full flex-col gap-2">
+      <svg viewBox={`0 0 ${W} ${H}`}
+           className="mx-auto block h-auto w-full max-w-[460px]"
            role="img" aria-label="Kurz a najbližšie vstupné úrovne gridu">
         {/* pásmo */}
         {bandX0 != null && bandX1 != null && bandX1 > bandX0 && (
-          <rect x={bandX0} y={AXIS - 26} width={bandX1 - bandX0} height={26}
+          <rect x={bandX0} y={AXIS - 16} width={bandX1 - bandX0} height={16}
                 fill="var(--surface)" />
         )}
-        {([[lo, "dolná hrana"], [hi, "horná hrana"]] as [number, string][])
-          .filter(([p]) => inView(p))
-          .map(([p, lab]) => (
-            <g key={lab}>
-              <line x1={x(p)} y1={AXIS - 30} x2={x(p)} y2={AXIS}
-                    stroke="var(--line)" strokeWidth={2} />
-              <text x={x(p)} y={AXIS - 36} textAnchor="middle"
-                    fill="var(--faint)" fontSize={11}>
-                {lab} {p4(p)}
-              </text>
-            </g>
-          ))}
+        {[lo, hi].filter(inView).map((p) => (
+          <line key={p} x1={x(p)} y1={AXIS - 20} x2={x(p)} y2={AXIS}
+                stroke="var(--line)" strokeWidth={2} />
+        ))}
 
         <line x1={X0} y1={AXIS} x2={X1} y2={AXIS} stroke="var(--line)" strokeWidth={1} />
 
-        {/* úrovne mriežky — popísaná je tá, ktorá naozaj otvorí */}
+        {/* úrovne mriežky — zvýraznená je tá, ktorá naozaj otvorí */}
         {sides.map((s) =>
           s.lad.filter((l) => inView(l.p)).map((l, i) => {
             const isMain = s.on && s.idx >= 0 ? l === s.main : i === 0;
             const live = s.on && l.allowed;
-            const op = live ? (isMain ? 1 : 0.45) : 0.3;
-            const d = pipsTo(l.p, px);
             return (
-              <g key={`${s.label}-${l.p}`}>
-                <line x1={x(l.p)} y1={AXIS - (isMain ? 26 : 13)}
-                      x2={x(l.p)} y2={AXIS + (isMain ? 26 : 12)}
-                      stroke={s.color} strokeWidth={isMain ? 2 : 1.5}
-                      strokeDasharray="5 4" strokeOpacity={op} />
-                {isMain && (
-                  <>
-                    <text x={x(l.p)} y={AXIS + 46} textAnchor="middle"
-                          fill={live ? "var(--ink)" : "var(--faint)"}
-                          fontSize={13} fontWeight={live ? 500 : 400}
-                          className="tabular-nums">
-                      {s.label} {fmtPrice(l.p)}
-                    </text>
-                    <text x={x(l.p)} y={AXIS + 62} textAnchor="middle"
-                          fill="var(--faint)" fontSize={11}>
-                      {!s.on ? "strana vypnutá"
-                        : !l.allowed ? "až za hranou pásma"
-                        : d === 0 ? "spustí sa hneď"
-                        : `${pips(d)} ${l.p > px ? "vyššie" : "nižšie"}`}
-                    </text>
-                  </>
-                )}
-              </g>
+              <line key={`${s.label}-${l.p}`}
+                    x1={x(l.p)} y1={AXIS - (isMain ? 18 : 9)}
+                    x2={x(l.p)} y2={AXIS + (isMain ? 18 : 9)}
+                    stroke={s.color} strokeWidth={isMain ? 2 : 1.5}
+                    strokeDasharray="5 4"
+                    strokeOpacity={live ? (isMain ? 1 : 0.45) : 0.3} />
             );
           }),
         )}
 
         {/* kurz — vždy v strede */}
-        <line x1={x(px)} y1={AXIS - 44} x2={x(px)} y2={AXIS}
+        <line x1={x(px)} y1={AXIS - 30} x2={x(px)} y2={AXIS}
               stroke="var(--ink)" strokeWidth={2.5} />
-        <circle cx={x(px)} cy={AXIS} r={4.5} fill="var(--ink)"
+        <circle cx={x(px)} cy={AXIS} r={4} fill="var(--ink)"
                 stroke="var(--bg)" strokeWidth={2} />
-        <text x={x(px)} y={AXIS - 52} textAnchor="middle" fill="var(--ink)"
-              fontSize={15} fontWeight={600} className="tabular-nums">
+        <text x={x(px)} y={AXIS - 36} textAnchor="middle" fill="var(--ink)"
+              fontSize={14} fontWeight={600} className="tabular-nums">
           {fmtPrice(px)}
         </text>
-
-        {/* hrany, ktoré sa do výrezu nezmestili */}
-        {[
-          !inView(hi) && `horná hrana ${p4(hi)} je ${pips(pipsTo(hi, px))} ${hi > px ? "nad" : "pod"}`,
-          !inView(lo) && `dolná hrana ${p4(lo)} je ${pips(pipsTo(lo, px))} ${lo > px ? "nad" : "pod"}`,
-        ].filter(Boolean).map((t, i) => (
-          <text key={i} x={X0} y={182 + i * 14} fill="var(--faint)" fontSize={11}>
-            {t}
-          </text>
-        ))}
       </svg>
+
+      <div className="grid grid-cols-2 gap-2">
+        {tiles.map((t) => (
+          <Tile key={t.label} label={t.label} value={t.value}
+                tone={t.tone} sub={t.sub} />
+        ))}
+      </div>
 
       <details className="group">
         <summary className="cursor-pointer list-none text-xs text-faint

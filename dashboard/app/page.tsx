@@ -3,7 +3,7 @@
 import GridBand from "@/components/GridBand";
 import Hero from "@/components/Hero";
 import PositionList from "@/components/PositionList";
-import { Section } from "@/components/ui";
+import { Section, Tile } from "@/components/ui";
 import { useLive } from "@/lib/useLive";
 import { useEnv } from "@/lib/env";
 import { money, pnlClass, signed } from "@/lib/format";
@@ -40,25 +40,14 @@ export default function Overview() {
         title="Kapitál"
         info="Marža pod 200 % je žltá, pod 100 % červená; broker začne zatvárať pozície sám pri 50 %. Swap otvorených = naakumulovaný náklad za držanie otvorených pozícií cez noc, priamo z brokera."
       >
-        {/* Jeden riadok namiesto štyroch dlaždíc — rovnaké štyri čísla na
-            ~45 px namiesto ~90 px, aby sa pozície dostali vyššie. */}
-        <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1 text-xs text-muted">
-          <span>
-            voľná marža <span className="num text-ink">{money(state?.free_margin)}</span>
-          </span>
-          <span>
-            využitá <span className="num text-ink">{money(state?.used_margin)}</span>
-          </span>
-          <span>
-            swap otvorených{" "}
-            <span className={`num ${pnlClass(openSwap)}`}>{signed(openSwap)}</span>
-          </span>
-          <span>
-            long vs short{" "}
-            <span className="num text-ink">
-              {swapRatio == null ? "—" : `${swapRatio.toFixed(0)}×`}
-            </span>
-          </span>
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+          <Tile label="Voľná marža" value={money(state?.free_margin)} />
+          <Tile label="Využitá" value={money(state?.used_margin)} />
+          <Tile label="Swap otvorených" value={signed(openSwap)} tone={pnlClass(openSwap)} />
+          <Tile
+            label="Long vs short swap"
+            value={swapRatio == null ? "—" : `${swapRatio.toFixed(0)}×`}
+          />
         </div>
       </Section>
 
