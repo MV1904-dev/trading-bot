@@ -6,7 +6,7 @@ import PositionList from "@/components/PositionList";
 import { Section } from "@/components/ui";
 import { useLive } from "@/lib/useLive";
 import { useEnv } from "@/lib/env";
-import { money, signed } from "@/lib/format";
+import { money, pnlClass, signed } from "@/lib/format";
 import type { BotState, DailyCycle, Position } from "@/lib/types";
 
 export default function Overview() {
@@ -26,6 +26,7 @@ export default function Overview() {
   const refreshAll = () => { r1(); r2(); r3(); };
 
   const state = states[0] ?? null;
+  const openSwap = positions.reduce((a, p) => a + (Number(p.funding_usd) || 0), 0);
   const swapRatio =
     state?.swap_long != null && state?.swap_short
       ? Math.abs(state.swap_long / state.swap_short)
@@ -39,27 +40,25 @@ export default function Overview() {
         title="Kapitál"
         info="Marža pod 200 % je žltá, pod 100 % červená; broker začne zatvárať pozície sám pri 50 %. Swap otvorených = naakumulovaný náklad za držanie otvorených pozícií cez noc, priamo z brokera."
       >
-        <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-          <div className="tile">
-            <div className="tile-label">Voľná marža</div>
-            <div className="tile-value">{money(state?.free_margin)}</div>
-          </div>
-          <div className="tile">
-            <div className="tile-label">Využitá</div>
-            <div className="tile-value">{money(state?.used_margin)}</div>
-          </div>
-          <div className="tile">
-            <div className="tile-label">Swap otvorených</div>
-            <div className="tile-value">
-              {signed(positions.reduce((a, p) => a + (Number(p.funding_usd) || 0), 0))}
-            </div>
-          </div>
-          <div className="tile">
-            <div className="tile-label">Long vs short swap</div>
-            <div className="tile-value">
+        {/* Jeden riadok namiesto štyroch dlaždíc — rovnaké štyri čísla na
+            ~45 px namiesto ~90 px, aby sa pozície dostali vyššie. */}
+        <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1 text-xs text-muted">
+          <span>
+            voľná marža <span className="num text-ink">{money(state?.free_margin)}</span>
+          </span>
+          <span>
+            využitá <span className="num text-ink">{money(state?.used_margin)}</span>
+          </span>
+          <span>
+            swap otvorených{" "}
+            <span className={`num ${pnlClass(openSwap)}`}>{signed(openSwap)}</span>
+          </span>
+          <span>
+            long vs short{" "}
+            <span className="num text-ink">
               {swapRatio == null ? "—" : `${swapRatio.toFixed(0)}×`}
-            </div>
-          </div>
+            </span>
+          </span>
         </div>
       </Section>
 

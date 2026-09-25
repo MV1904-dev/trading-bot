@@ -114,7 +114,10 @@ export default function GridBand({ state }: { state: BotState | null }) {
   ];
 
   return (
-    <div className="flex flex-col gap-2">
+    // SVG má pevný viewBox 460×200, takže s w-full rástlo do výšky spolu so
+    // šírkou okna — na desktope z neho bolo 300 px a všetky popisky sa
+    // úmerne nafúkli. Strop na 460 px ho drží v mierke, v akej je kreslený.
+    <div className="mx-auto flex w-full max-w-[460px] flex-col gap-2">
       <svg viewBox={`0 0 ${W} 200`} className="block h-auto w-full"
            role="img" aria-label="Kurz a najbližšie vstupné úrovne gridu">
         {/* pásmo */}
