@@ -56,7 +56,7 @@ tg_notify() {
   [[ -n "$token" && -n "${TELEGRAM_CHAT_ID:-}" ]] || return 0
   curl -s -o /dev/null --max-time 10 \
     "https://api.telegram.org/bot${token}/sendMessage" \
-    -d chat_id="${TELEGRAM_CHAT_ID}" -d text="🤖 Gašpar · $1" || true
+    -d chat_id="${TELEGRAM_CHAT_ID}" -d text="🤖 · $1" || true
 }
 
 echo "[run_bot_ctrader] štart $(date '+%F %T')"
