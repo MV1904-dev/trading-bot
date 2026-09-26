@@ -90,8 +90,6 @@ class CTraderBotConfig:
         (0.50, 0.0013),   # ≤ 0,50 €/deň        → krok ±0,13 %
         (1.00, 0.0015),   # ≤ 1,00 €/deň        → krok ±0,15 %
     )                      # > 1,00 €/deň        → strana VYPNUTÁ
-    P500_SIGNALS: bool = True      # zrkadliace signály pre Plus500 (TG)
-    P500_SIGNAL_QTY: float = 10_000
     BRIEFING_HOUR: int = 8         # ranný briefing 8–10 h
     BRIEFING_HOUR_END: int = 10
     S7_ENABLED: bool = False    # NEPREŠIEL nezávislým overením — viď trading/strategy_s7.py
@@ -737,47 +735,12 @@ class CTraderBot:
                 s.on_trade_opened(trade_id, sig.side, res["price"])
         self.db.log_signal(sig.strategy_id, sig.side, bar.close,
                            0.0, 0.0, "executed", sig.reason, ctx)
-        sl_txt = f" | SL {sig.sl_price:.5f}" if sig.sl_price else ""
-        self.tg.send(f"📈 <b>{sig.strategy_id}</b> OTVORENÉ {sig.side.upper()} "
-                     f"{sig.qty:,.0f} {self.cfg.SYMBOL} @ {res['price']:.5f}\n"
-                     f"TP {sig.tp_price:.5f}{sl_txt} (na serveri)\n"
-                     f"dôvod: {sig.reason}")
-        if self.cfg.P500_SIGNALS:
-            self.tg.send(self._p500_open_msg(trade_id, sig.side, res["price"],
-                                             sig.tp_price, sig.sl_price))
+        # Notifikácia je úmyselne jednoriadková (zadanie 26. 9. 2026).
+        # Objem, TP, SL a dôvod vstupu sú v dashboarde, v DB (log_signal)
+        # a v logu — do telefónu patrí len to, že sa niečo stalo.
+        self.tg.send(f"📈 Otvorené {sig.side.upper()} @ {res['price']:.5f}")
         log.info("OTVORENÉ %s @ %.5f (pozícia %s, db #%d)",
                  sig.side, res["price"], res["position_id"], trade_id)
-
-    def _p500_open_msg(self, trade_id: int, side: str, entry: float,
-                       tp: float, sl: float = 0.0) -> str:
-        q = self.cfg.P500_SIGNAL_QTY
-        smer = "🔺 <b>KÚPIŤ</b>" if side == "long" else "🔻 <b>PREDAŤ</b>"
-        zisk = abs(tp - entry) * q / tp
-        sl_line = (f"🛑 Zavrieť pri strate: <code>{sl:.5f}</code>\n"
-                   if sl else "🚫 Stop Loss: nenastavuj\n")
-        return (f"🟠 <b>P500 SIGNÁL #{trade_id} — OTVOR</b>\n"
-                f"━━━━━━━━━━━━━━━\n"
-                f"{smer} EUR/USD\n"
-                f"Čiastka: <b>{q:,.0f}</b>\n"
-                f"Trhová cena teraz: ~<code>{entry:.5f}</code>\n"
-                f"━━━━━━━━━━━━━━━\n"
-                f"Po otvorení nastav:\n"
-                f"🎯 Zavrieť pri zisku: <code>{tp:.5f}</code>\n"
-                f"{sl_line}"
-                f"Očakávaný zisk pri cieli: ~{zisk:.2f} €")
-
-    def _p500_close_msg(self, trade_id: int, side: str, entry: float,
-                        exit_price: float) -> str:
-        q = self.cfg.P500_SIGNAL_QTY
-        zisk = (exit_price - entry) * q / exit_price if side == "long" \
-            else (entry - exit_price) * q / exit_price
-        return (f"🟢 <b>P500 SIGNÁL #{trade_id} — ZATVORENÉ</b>\n"
-                f"━━━━━━━━━━━━━━━\n"
-                f"{side.upper()} z <code>{entry:.5f}</code> skončil na "
-                f"<code>{exit_price:.5f}</code>.\n"
-                f"Ak máš nastavené „Zavrieť pri zisku/strate“, pozícia sa "
-                f"zatvorila sama — skontroluj v appke.\n"
-                f"Očakávaný výsledok: {zisk:+.2f} € na {q:,.0f}")
 
     def _config_line(self) -> str:
         g = self.strategy.cfg
@@ -868,8 +831,8 @@ class CTraderBot:
                 # Bola tu neexistujúca broker.close_trade() — časový stop by
                 # spadol, keby ho niekedy stratégia zapla (max_hold_s > 0).
                 self.broker.close_position(row["entry_order_id"])
-                self.tg.send(f"⏱ <b>{row['strategy']}</b> časový stop "
-                             f"({mh / 3600:.0f} h) — zatváram #{row['id']}.")
+                self.tg.send(f"⏱ Časový stop — zatváram "
+                             f"{row['side'].upper()}.")
             except CTraderError as exc:
                 log.warning("Časový stop zlyhal pre #%d: %s", row["id"], exc)
 
@@ -898,15 +861,17 @@ class CTraderBot:
         for s in self.strategies:
             if s.id == row["strategy"]:
                 s.on_trade_closed(db_id, row["side"], close_price)
-        note = " (počas výpadku)" if offline else ""
-        self.tg.send(f"✅ <b>{row['strategy']}</b> ZAVRETÉ {row['side'].upper()} "
-                     f"{row['qty']:,.0f} {row['entry_price']:.5f} → "
-                     f"{close_price:.5f}{note}\n"
-                     f"P/L <b>{pnl:+.2f}</b> (swap {swap:+.2f}, provízie "
-                     f"−{comm:.2f}; reálne čísla z dealu)")
-        if self.cfg.P500_SIGNALS:
-            self.tg.send(self._p500_close_msg(db_id, row["side"],
-                                              row["entry_price"], close_price))
+        # Jedno číslo, a musí to byť to skutočné: grossProfit z dealu swap
+        # ani províziu neobsahuje, takže bez tohto súčtu by správa hlásila
+        # viac, než reálne pribudlo na účte. Rozpis ostáva v dashboarde.
+        net = pnl + swap - comm
+        marks = []
+        if offline:
+            marks.append("počas výpadku")
+        if not deal:
+            marks.append("odhad")
+        note = f" ({', '.join(marks)})" if marks else ""
+        self.tg.send(f"✅ Zavreté {row['side'].upper()} {net:+.2f} €{note}")
         log.info("ZAVRETÉ db #%d %s @ %.5f, P/L %+.2f%s",
                  db_id, row["side"], close_price, pnl, note)
         self._refresh_sync_snapshot()
@@ -1535,8 +1500,7 @@ class CTraderBot:
         # a reconcile reštartoval, obchod sa dopočíta ako ručný, nie ako TP.
         self.db.mark_manual_close(db_id)
         self.broker.close_position(row["entry_order_id"])
-        self.tg.send(f"🖐 <b>{row['strategy']}</b> #{db_id} "
-                     f"{row['side'].upper()} zatvorené ručne z dashboardu.")
+        self.tg.send(f"🖐 Zatváram {row['side'].upper()} ručne z dashboardu.")
         self.sync.finish(cmd["id"], True, f"#{db_id} zatvorené")
         # _poll_closes dopočíta reálnu cenu a P/L z dealu.
         self._poll_closes()
