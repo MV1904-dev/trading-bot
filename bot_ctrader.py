@@ -258,7 +258,8 @@ class CTraderBot:
         self._restore_state()
         self.macro.refresh()
         restarted = os.getenv("BOT_RESTARTED") == "1"
-        self.tg.send(f"🤖 <b>cTrader bot {'reštartovaný' if restarted else 'spustený'}</b> "
+        # Bez ikony robota — tú už nesie podpis v TG_PREFIX.
+        self.tg.send(f"<b>{'Reštartovaný' if restarted else 'Spustený'}</b> "
                      f"({'demo' if self.cfg.DEMO else '🔴 LIVE'}, {self.cfg.SYMBOL})\n"
                      + "\n".join(s.status_line() for s in self.strategies) + "\n"
                      f"Balance: {acct['balance']:,.2f}\n"
