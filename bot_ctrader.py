@@ -5,7 +5,7 @@ IBKR aj Oanda botov.
 Konfigurácia (rovnaká filozofia ako Oanda vetva):
 * Grid25-G2B (gap → TP na preskočenú úroveň), pozícia 2 000 EUR
 * kapacita 20 úrovní/smer bez rezervy (G3_cap20) + G8 režimová poistka
-* Telegram prefix „🤖 Gašpar", vlastná DB data/bot_ctrader.db
+* Telegram prefix „🤖", vlastná DB data/bot_ctrader.db
 * TP žije na serveri (relativeTakeProfit pri MARKET orderi)
 * zavretia sa detegujú cez reconcile pozícií; realizovaný P/L, swap
   a provízie sa preberajú zo zatvárajúceho dealu (skutočné čísla)
@@ -106,7 +106,7 @@ class CTraderBotConfig:
     DD_ALARM_PCT: float = field(
         default_factory=lambda: float(os.getenv("CTRADER_DD_ALARM_PCT", "25")))
     TIMEZONE: str = "Europe/Bratislava"
-    TG_PREFIX: str = "🤖 Gašpar (demo) · "
+    TG_PREFIX: str = "🤖 demo · "
     DB_PATH: Path = field(default_factory=lambda: ROOT / "data" / "bot_ctrader.db")
     LOG_PATH: Path = field(default_factory=lambda: ROOT / "data" / "bot_ctrader.log")
     CALENDAR_CACHE: Path = field(
@@ -1535,7 +1535,7 @@ def main() -> int:
         # 500 € účet = 1/10 demo účtu → QTY 1 000 (zhodou okolností broker
         # minimum 0,01 lotu); geometria gridu ostáva identická s demo behom.
         cfg.QTY = float(os.getenv("CTRADER_QTY", "1000"))
-        cfg.TG_PREFIX = "🤖 Gašpar · "
+        cfg.TG_PREFIX = "🤖 · "
         # Čistý stav: demo DB nesie virtuálnu equity, kotvy a históriu
         # obchodov z demo cien — miešanie by rozbilo shadow report aj P/L.
         cfg.DB_PATH = ROOT / "data" / "bot_ctrader_live.db"
