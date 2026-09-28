@@ -27,7 +27,7 @@ export default function PnlPage() {
     <main>
       <Section
         title="P/L"
-        info="Celá história, nie posledný mesiac. Riadok vznikne len pre obdobie so zavretým obchodom, podľa UTC dátumu zavretia — víkendy a dni bez zavretia teda chýbajú a počet riadkov je nižší než počet kalendárnych dní. Deň sa dá rozkliknúť na jednotlivé zrealizované obchody, týždeň a mesiac na dni, z ktorých sa skladajú. Kumulatív vpravo beží od prvého obchodu, takže posledný riadok hore zodpovedá realizovanému zisku v hlavičke prehľadu."
+        info="Celá história, nie posledný mesiac. Riadok vznikne len pre obdobie so zavretým obchodom, podľa dátumu zavretia v našom čase — víkendy a dni bez zavretia teda chýbajú a počet riadkov je nižší než počet kalendárnych dní. Deň sa dá rozkliknúť na jednotlivé zrealizované obchody, týždeň a mesiac na dni, z ktorých sa skladajú. Kumulatív vpravo beží od prvého obchodu, takže posledný riadok hore zodpovedá realizovanému zisku v hlavičke prehľadu."
       >
         <div className="mb-2 flex items-center gap-2">
           <DataStamp iso={newest} />

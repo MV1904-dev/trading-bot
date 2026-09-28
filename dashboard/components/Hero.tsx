@@ -4,7 +4,7 @@ import { useState } from "react";
 import { createClient } from "@/lib/supabase";
 import { dateTime, money, pnlClass, signed } from "@/lib/format";
 import { DataStamp, RefreshButton, Tile } from "@/components/ui";
-import { fxMarketClosed } from "@/lib/market";
+import { botToday, fxMarketClosed } from "@/lib/market";
 import type { BotState, DailyCycle, Position } from "@/lib/types";
 
 const STALE_MS = 3 * 60 * 1000;
@@ -50,7 +50,7 @@ export default function Hero({
   const realized =
     deposits > 0 && state.balance != null ? state.balance - deposits : null;
 
-  const today = new Date().toISOString().slice(0, 10);
+  const today = botToday(now);
   const todayRows = daily.filter((d) => d.day === today);
   const todayPnl = todayRows.reduce((a, d) => a + (Number(d.pnl_usd) || 0), 0);
   const floating = positions.reduce((a, p) => a + (Number(p.pnl_float) || 0), 0);

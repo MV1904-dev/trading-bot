@@ -193,7 +193,19 @@ class SupabaseSync:
                 self.confirmed_trades_until,
                 float(snap.get("trades_until") or 0.0))
         daily = [dict(d, env=self.env) for d in snap.get("daily") or []]
-        self._upsert("daily_cycles", daily, on_conflict="env,day,strategy")
+        if self._upsert("daily_cycles", daily, on_conflict="env,day,strategy"):
+            # Deň sa počíta v lokálnom čase bota, takže obchod zavretý po
+            # polnoci sa môže presunúť na iný deň — a ten pôvodný sa tým
+            # môže úplne vyprázdniť. Upsert prázdny deň neprepíše (nie je
+            # čo poslať), takže bez tohto by v dashboarde ostal visieť
+            # riadok so starými číslami. Mažeme len v okne, ktoré snapshot
+            # naozaj pokrýva (posledných ~120 dní s obchodom) a len vo
+            # vlastnom env — inak by live bot zmazal demo históriu.
+            days = sorted({d["day"] for d in daily})
+            if days:
+                self._req("DELETE", f"daily_cycles?env=eq.{self.env}"
+                                    f"&day=gte.{days[0]}"
+                                    f"&day=not.in.({','.join(days)})")
 
         acct = snap.get("account") or {}
         now = time.time()

@@ -24,7 +24,13 @@ const BUCKETS: { id: Bucket; label: string; unit: string }[] = [
   { id: "month", label: "Mesiace", unit: "mesiacov" },
 ];
 
-/** Pondelok týždňa, do ktorého dátum patrí (ISO týždeň, v UTC). */
+/**
+ * Pondelok týždňa, do ktorého dátum patrí (ISO týždeň).
+ *
+ * Kľúč `day` je už hotový dátum v čase bota, nie časová pečiatka — všetko
+ * nižšie s ním preto počíta a formátuje v UTC zámerne, aby sa zo „27. 9."
+ * nestal v prehliadači na inom kontinente 26. alebo 28.
+ */
 function mondayOf(day: string): string {
   const d = new Date(`${day}T00:00:00Z`);
   d.setUTCDate(d.getUTCDate() - ((d.getUTCDay() + 6) % 7));
