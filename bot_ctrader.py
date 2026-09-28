@@ -1237,6 +1237,42 @@ class CTraderBot:
         with self._sync_lock:
             return dict(self._sync_snap)
 
+    DAILY_DAYS = 120
+
+    def _daily_rows(self) -> list[dict]:
+        """P/L po dňoch — deň je LOKÁLNY (cfg.TIMEZONE), nie UTC.
+
+        SQLite by deň vyrobilo samo (date(ts_close,'unixepoch')), ale len
+        v UTC alebo podľa TZ servera. Obchod zavretý o 00:51 v Bratislave má
+        22:51 UTC predošlého dňa, takže v dashboarde padol do včerajšieho
+        riadku a dlaždica „Dnes" ostala na nule (28. 9. 2026, obchod #137).
+        Zoskupujeme preto v Pythone cez ZoneInfo, ktorá pozná aj prechod
+        letného času — fixný posun by v zime kazil to isté o hodinu inde.
+        """
+        acc: dict[tuple[str, str], dict] = {}
+        for r in self.db.conn.execute(
+                "SELECT ts_close, strategy, pnl_usd, commission_usd, "
+                "funding_usd FROM trades "
+                "WHERE status='closed' AND ts_close IS NOT NULL"):
+            day = datetime.fromtimestamp(r["ts_close"], self.tz).strftime("%Y-%m-%d")
+            comm = r["commission_usd"] or 0.0
+            fund = r["funding_usd"] or 0.0
+            net = (r["pnl_usd"] or 0.0) - comm + fund
+            d = acc.setdefault((day, r["strategy"]), {
+                "day": day, "strategy": r["strategy"], "cycles": 0,
+                "pnl_usd": 0.0, "commission_usd": 0.0, "funding_usd": 0.0,
+                "wins": 0, "losses": 0})
+            d["cycles"] += 1
+            d["pnl_usd"] += net
+            d["commission_usd"] += comm
+            d["funding_usd"] += fund
+            d["wins" if net > 0 else "losses"] += 1
+        rows = sorted(acc.values(), key=lambda d: d["day"], reverse=True)
+        for d in rows:
+            for k in ("pnl_usd", "commission_usd", "funding_usd"):
+                d[k] = round(d[k], 2)
+        return rows[:self.DAILY_DAYS]
+
     def _refresh_sync_snapshot(self, balance: float | None = None) -> None:
         """Beží v obchodnom vlákne (SQLite spojenie je viazané naň)."""
         if not self.sync.enabled:
@@ -1327,21 +1363,7 @@ class CTraderBot:
             if confirmed > since:
                 self.db.meta_set("sb_trades_until", confirmed)
 
-            daily = [{
-                "day": d["day"], "strategy": d["strategy"],
-                "cycles": d["cycles"], "pnl_usd": d["pnl"],
-                "commission_usd": d["comm"], "funding_usd": d["fund"],
-                "wins": d["wins"], "losses": d["losses"],
-            } for d in self.db.conn.execute(
-                "SELECT date(ts_close,'unixepoch') day, strategy, "
-                "COUNT(*) cycles, SUM(pnl_usd-commission_usd+funding_usd) pnl, "
-                "SUM(commission_usd) comm, SUM(funding_usd) fund, "
-                "SUM(CASE WHEN pnl_usd-commission_usd+funding_usd > 0 "
-                "THEN 1 ELSE 0 END) wins, "
-                "SUM(CASE WHEN pnl_usd-commission_usd+funding_usd <= 0 "
-                "THEN 1 ELSE 0 END) losses "
-                "FROM trades WHERE status='closed' AND ts_close IS NOT NULL "
-                "GROUP BY day, strategy ORDER BY day DESC LIMIT 120")]
+            daily = self._daily_rows()
 
             bal = balance if balance is not None else self._balance_cached()
             reason = self._blocked_reason()
