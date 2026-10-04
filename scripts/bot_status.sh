@@ -107,8 +107,12 @@ echo "odmietnutí Supabase (PGRST): $pg"
   || echo "⚠️  dashboard môže ukazovať starý stav"
 
 say "CHYBY A VAROVANIA za 24 h (posledných 10)"
-# Len -p err nestačí: opakovanie auth reťazca a neúspešný zápis tokenov
-# logujú WARNING, takže rozbitý bot vyzeral ako „žiadne chyby".
-journalctl -u ctrader-bot --since "-24h" --no-pager -p warning \
-  | grep -v "^-- " | tail -10 || echo "(žiadne)"
+# Filtrovať podľa priority (-p err / -p warning) tu NEFUNGUJE: služba píše
+# cez logging.StreamHandler na stderr a systemd (StandardError=journal, bez
+# SyslogLevelPrefix) označí každý riadok ako info. Sekcia preto roky
+# mlčala aj vtedy, keď bot hodinu hlásil zlyhanie auth. Úroveň je v texte
+# riadka — %(levelname)s z basicConfig — tak sa hľadá tam.
+errs=$(journalctl -u ctrader-bot --since "-24h" --no-pager \
+  | grep -E " (ERROR|WARNING|CRITICAL) " | tail -10)
+[ -n "$errs" ] && printf '%s\n' "$errs" || echo "(žiadne)"
 echo
