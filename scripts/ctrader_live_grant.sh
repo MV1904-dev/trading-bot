@@ -4,7 +4,14 @@
 # bežiaci bot prepisuje pri vlastnom token refreshi (broker_ctrader ~:176).
 # Prepnutie na live ich odtiaľ preberie až so zastaveným botom.
 #
-# Spustenie z Macu:  ssh -t hetzner 'bash /home/marian/trading-bot/scripts/ctrader_live_grant.sh'
+# Spustenie z Macu (interaktívne, skript sa spýta na kód):
+#   ssh -t hetzner 'bash /home/marian/trading-bot/scripts/ctrader_live_grant.sh'
+#
+# Bez terminálu (automatizácia, agent, CI) sa kód odovzdá ako argument:
+#   ssh hetzner 'bash /home/marian/trading-bot/scripts/ctrader_live_grant.sh <KÓD>'
+# Autorizačný kód je jednorazový a platí ~minútu, takže po výmene je mŕtvy —
+# v histórii shellu po ňom neostane nič použiteľné. Tokeny, ktoré z neho
+# vzniknú, sa vypisujú len do .env, nikdy na výstup.
 set -eu
 cd /home/marian/trading-bot
 
@@ -12,14 +19,27 @@ CID=$(grep '^CTRADER_CLIENT_ID=' .env | cut -d= -f2)
 CSEC=$(grep '^CTRADER_CLIENT_SECRET=' .env | cut -d= -f2)
 [ -n "$CID" ] && [ -n "$CSEC" ] || { echo "CHYBA: chýba CLIENT_ID/SECRET v .env."; exit 1; }
 
-echo "1) Otvor v prehliadači:"
-echo "   https://openapi.ctrader.com/apps/auth?client_id=${CID}&redirect_uri=https%3A%2F%2Fgoogle.com&scope=trading"
-echo "   Prihlás sa svojím cTrader ID a POVOĽ AJ LIVE účet 2079276 (Account #1)."
-echo "2) Po presmerovaní na google.com skopíruj z adresného riadka hodnotu za ?code="
-echo "   (kód platí ~minútu a je jednorazový)"
-echo
-printf "Vlož kód: "
-read -r CODE
+CODE="${1:-}"
+if [ -z "$CODE" ]; then
+  echo "1) Otvor v prehliadači:"
+  echo "   https://openapi.ctrader.com/apps/auth?client_id=${CID}&redirect_uri=https%3A%2F%2Fgoogle.com&scope=trading"
+  echo "   Prihlás sa svojím cTrader ID a POVOĽ AJ LIVE účet 2079276 (Account #1)."
+  echo "2) Po presmerovaní na google.com skopíruj z adresného riadka hodnotu za ?code="
+  echo "   (kód platí ~minútu a je jednorazový)"
+  echo
+  if [ -t 0 ]; then
+    printf "Vlož kód: "
+    read -r CODE
+  else
+    # Sem spadne každé volanie bez pridelenej pseudo-konzoly (ssh bez -t,
+    # agent, CI). Predtým to tu umieralo na prázdnom `read` s hláškou
+    # o stdin, ktorá nepovedala, čo s tým.
+    echo "Stdin nie je terminál, takže sa kód nemám koho spýtať." >&2
+    echo "Odovzdaj ho ako argument:" >&2
+    echo "   ssh hetzner 'bash $0 <KÓD>'" >&2
+    exit 1
+  fi
+fi
 [ -n "$CODE" ] || { echo "CHYBA: prázdny kód."; exit 1; }
 
 RESP=$(curl -s -G "https://openapi.ctrader.com/apps/token" \
