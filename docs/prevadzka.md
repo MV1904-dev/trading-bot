@@ -136,7 +136,14 @@ ssh hetzner 'systemctl start ctrader-bot'
 ```
 
 Grant vypíše odkaz, v prehliadači treba **povoliť aj live účet**; kód z
-presmerovania platí asi minútu. `ctrader_live_promote.sh` potom prepne nové
+presmerovania platí asi minútu. `ssh -t` je podstatné — bez pridelenej
+konzoly sa skript nemá koho na kód spýtať. Keď terminál nie je (agent,
+automatizácia), kód sa odovzdá rovno ako argument:
+
+```bash
+ssh hetzner 'bash /home/marian/trading-bot/scripts/ctrader_live_grant.sh <KÓD>'
+```
+ `ctrader_live_promote.sh` potom prepne nové
 tokeny na kľúče, ktoré bot číta — musí pritom byť **zastavený**, inak si `.env`
 prepíšete navzájom.
 
