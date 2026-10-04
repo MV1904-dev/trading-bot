@@ -10,6 +10,14 @@ Skript skúsi SAMOTNÝ app auth (clientId + clientSecret, access token sa
 naň nepoužíva) proti demo aj live hostu. Kde prejde, vypíše aj účty, ktoré
 má access token povolené — z toho je vidieť, či je live účet ešte v grante.
 
+KAŽDÝ ENDPOINT BEŽÍ VO VLASTNOM PROCESE. Keď sa oba testovali v jednom,
+druhý v poradí vždy spadol na „deferred timeout (5 s)" — prvé spojenie
+ostáva otvorené a odpoveď na druhé už nedorazí. Vyzeralo to presne ako
+výpadok live brány: 4. 10. 2026 sme podľa toho skoro napísali Spotware
+supportu, kým ctrader_authlog.py neukázal, že live odpovedá za 1,05 s.
+Poradie testov tým pádom rozhodovalo o výsledku — ktorý endpoint išiel
+druhý, ten „nefungoval".
+
 ⚠️ NAJPRV ZASTAV BOTA. Spotware drží jedno app-auth spojenie naraz, takže
    bežiaci bot by výsledok skreslil:
        ssh hetzner 'systemctl stop ctrader-bot'
@@ -27,6 +35,7 @@ import argparse
 import getpass
 import logging
 import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -78,6 +87,9 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--client-id", default="", help="prebije .env")
     ap.add_argument("--client-secret", default="", help="prebije .env")
+    ap.add_argument("--only", choices=("demo", "live"), default="",
+                    help="otestovať len jeden endpoint (takto si skript "
+                         "volá sám seba, aby mal každý vlastný proces)")
     ap.add_argument("--ask", action="store_true",
                     help="spýtať sa na credentials postupne (secret sa "
                          "nezobrazuje a neostane v histórii shellu)")
@@ -107,6 +119,10 @@ def main() -> int:
         print("CHYBA: v .env chýba CTRADER_CLIENT_ID / CLIENT_SECRET.",
               file=sys.stderr)
         return 2
+    if args.only:
+        return 0 if check(args.only.upper(), args.only == "demo",
+                          cid, secret, token) else 1
+
     want_demo = os.getenv("CTRADER_DEMO", "1") != "0"
     print(f"CTRADER_DEMO={'1' if want_demo else '0'} → bot beží proti "
           f"{'DEMO' if want_demo else 'LIVE'} endpointu.")
@@ -114,8 +130,22 @@ def main() -> int:
           + (" (z príkazového riadka)" if args.client_id else "")
           + f", ACCESS_TOKEN {'je nastavený' if token else 'nepoužije sa'}")
 
-    ok_demo = check("DEMO", True, cid, secret, token)
-    ok_live = check("LIVE", False, cid, secret, token)
+    # Credentials idú deťom prostredím, nie argumentmi: v argv by ich videl
+    # ktokoľvek cez `ps`, čo by zahodilo celý zmysel --ask (getpass drží
+    # secret mimo histórie shellu). load_dotenv() v dieťati existujúce
+    # premenné neprepisuje, takže sa použijú tieto.
+    env = dict(os.environ)
+    env["CTRADER_CLIENT_ID"] = cid
+    env["CTRADER_CLIENT_SECRET"] = secret
+    env["CTRADER_ACCESS_TOKEN"] = token
+    me = str(Path(__file__).resolve())
+
+    def run(which: str) -> bool:
+        return subprocess.run([sys.executable, me, "--only", which],
+                              env=env).returncode == 0
+
+    ok_demo = run("demo")
+    ok_live = run("live")
 
     print("\n--- záver ---")
     if ok_demo and ok_live:
@@ -127,6 +157,9 @@ def main() -> int:
         print("takže presne toto ho drží mimo. Over stav aplikácie na")
         print("https://openapi.ctrader.com/apps a grant pre live účet")
         print("(scripts/ctrader_live_grant.sh).")
+        print("Predtým než budeš písať supportu, potvrď to ešte cez")
+        print("scripts/ctrader_authlog.py — ten meria každú bránu zvlášť")
+        print("a vypíše presné časy odpovedí.")
     elif ok_live and not ok_demo:
         print("Live prejde, demo nie → pre bota s CTRADER_DEMO=0 je to OK,")
         print("problém bol teda inde než v app authe.")
