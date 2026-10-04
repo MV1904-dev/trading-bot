@@ -64,9 +64,35 @@ if [ -z "$(journalctl -u ctrader-bot -n 1 --no-pager 2>/dev/null | grep -v '^-- 
   exit 0
 fi
 
-say "SPOJENIE (posledné)"
-journalctl -u ctrader-bot --no-pager | grep -E "cTrader pripojený|LIVE pripojený|Obnova stavu" \
-  | tail -3 || echo "(nič)"
+say "SPOJENIE S BROKEROM"
+# Pozor: „služba beží" neznamená „obchoduje". Proces môže žiť a ďalej
+# zrkadliť do Supabase, kým je auth reťazec rozbitý (4. 10. 2026: zlyhala
+# obnova access tokenu a bot bol dva dni slepý, pritom status hlásil OK).
+# Verdikt sa preto skladá z toho, čo je v logu NOVŠIE: úspešné pripojenie,
+# alebo zlyhanie auth.
+AUTH_BAD="Token refresh zlyhal|cTrader auth zlyhal|App auth zamietnutý|Account auth zamietnutý|Auth reťazec zopakujem"
+jt() { journalctl -u ctrader-bot --no-pager -o short-unix 2>/dev/null \
+         | grep -E "$1" | tail -1 | cut -d. -f1; }
+ok_ts=$(jt "cTrader pripojený|LIVE pripojený")
+bad_ts=$(jt "$AUTH_BAD")
+now_ts=$(date +%s)
+age() {
+  [ -n "${1:-}" ] || { echo "nikdy"; return; }
+  m=$(( (now_ts - $1) / 60 ))
+  [ "$m" -lt 90 ] && echo "pred $m min" || echo "pred $((m / 60)) h"
+}
+if [ -n "${ok_ts:-}" ] && { [ -z "${bad_ts:-}" ] || [ "$ok_ts" -gt "$bad_ts" ]; }; then
+  echo "✅ pripojený ($(age "$ok_ts"))"
+else
+  echo "⛔ NEPRIPOJENÝ — proces žije, ale k brokerovi sa nedostal."
+  echo "   posledné pripojenie:    $(age "${ok_ts:-}")"
+  echo "   posledné zlyhanie auth: $(age "${bad_ts:-}")"
+  echo "   nové vstupy stoja; TP otvorených pozícií bežia na serveri brokera."
+  journalctl -u ctrader-bot --no-pager 2>/dev/null \
+    | grep -E "$AUTH_BAD" | tail -3
+  echo "   → ak ide o token, pozri docs/prevadzka.md, časť „Ak vypršali tokeny\"."
+fi
+journalctl -u ctrader-bot --no-pager | grep -E "Obnova stavu" | tail -1
 
 say "GRID KROKY (swapová automatika)"
 journalctl -u ctrader-bot --since "-24h" --no-pager | grep "grid kroky" | tail -2 \
@@ -80,7 +106,9 @@ echo "odmietnutí Supabase (PGRST): $pg"
 [ "$snap" = "0" ] && [ "$pg" = "0" ] && echo "✅ zrkadlo v poriadku" \
   || echo "⚠️  dashboard môže ukazovať starý stav"
 
-say "CHYBY za 24 h (posledných 10)"
-journalctl -u ctrader-bot --since "-24h" --no-pager -p err \
+say "CHYBY A VAROVANIA za 24 h (posledných 10)"
+# Len -p err nestačí: opakovanie auth reťazca a neúspešný zápis tokenov
+# logujú WARNING, takže rozbitý bot vyzeral ako „žiadne chyby".
+journalctl -u ctrader-bot --since "-24h" --no-pager -p warning \
   | grep -v "^-- " | tail -10 || echo "(žiadne)"
 echo

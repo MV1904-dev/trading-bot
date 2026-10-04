@@ -38,8 +38,14 @@ Stav kedykoľvek:
 ssh hetzner '/home/marian/trading-bot/scripts/bot_status.sh'
 ```
 
-Vypíše službu, nasadenú vetvu, posledné pripojenie, swapy a kroky gridu,
-zlyhania zrkadla do Supabase a chyby za 24 h.
+Vypíše službu, nasadenú vetvu, **či je bot naozaj pripojený k brokerovi**,
+swapy a kroky gridu, zlyhania zrkadla do Supabase a chyby aj varovania za 24 h.
+
+> „Služba beží" neznamená „obchoduje". Proces môže žiť a ďalej zrkadliť do
+> Supabase, kým je auth reťazec rozbitý — 4. 10. 2026 bol bot takto dva dni
+> slepý. Preto má skript samostatný verdikt **SPOJENIE S BROKEROM**: skladá
+> sa z toho, čo je v logu novšie — úspešné pripojenie, alebo zlyhanie auth.
+> V dashboarde to isté hovorí `broker_connected` v hlavičke.
 
 Praktické aliasy na Mac (`~/.zshrc`):
 
