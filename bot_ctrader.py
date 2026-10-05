@@ -85,6 +85,14 @@ class CTraderBotConfig:
     # 3. 9. 2026. Nad poslednou hranicou sa strana neotvára vôbec.
     SWAP_AUTO: bool = field(
         default_factory=lambda: os.getenv("CTRADER_SWAP_AUTO", "1") != "0")
+    # Pásmo: long sa otvára pod BAND_HIGH, short nad BAND_LOW. Hodnoty sú
+    # prevádzkové rozhodnutie, nie lab konštanta (tá ostáva v Grid25Config),
+    # a menia sa cez .env bez zásahu do kódu — pásmo sa posúva podľa trhu
+    # častejšie než čokoľvek iné.
+    BAND_LOW: float = field(
+        default_factory=lambda: float(os.getenv("CTRADER_BAND_LOW", "1.1250")))
+    BAND_HIGH: float = field(
+        default_factory=lambda: float(os.getenv("CTRADER_BAND_HIGH", "1.1600")))
     SWAP_TIERS: tuple = (
         (0.25, 0.0010),   # náklad ≤ 0,25 €/deň → krok ±0,10 %
         (0.50, 0.0013),   # ≤ 0,50 €/deň        → krok ±0,13 %
@@ -162,7 +170,9 @@ class CTraderBot:
         grid = Grid25(Grid25Config(qty=cfg.QTY, base_levels=cfg.CAP_BASE,
                                    reserve_levels=cfg.CAP_RESERVE,
                                    step_short=cfg.STEP_SHORT,
-                                   step_long=cfg.STEP_LONG))
+                                   step_long=cfg.STEP_LONG,
+                                   band_low=cfg.BAND_LOW,
+                                   band_high=cfg.BAND_HIGH))
         grid.id = "Grid25-G2B-CT"
         # Swapová automatika si kroky pamätá v DB — po reštarte musia
         # zodpovedať poslednému rozhodnutiu, nie defaultom z configu.
@@ -748,7 +758,7 @@ class CTraderBot:
         krok_s = f"+{g.step_short:.2%}" if g.short_enabled else "VYP"
         krok_l = f"−{g.step_long:.3%}" if g.long_enabled else "VYP"
         return (f"⚙️ G2B {g.qty:,.0f} | krok S {krok_s} / L {krok_l} "
-                f"| TP {g.tp_pct:.2%} | pásma {g.band_low:.2f}–{g.band_high:.2f} "
+                f"| TP {g.tp_pct:.2%} | pásmo {g.band_low:.4f}–{g.band_high:.4f} "
                 f"| kapacita {g.base_levels}+{g.reserve_levels} | blackout ±30 min "
                 f"| G8 poistka | S7 {'ON' if self.cfg.S7_ENABLED else 'off'}")
 

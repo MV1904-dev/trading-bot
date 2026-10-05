@@ -98,6 +98,8 @@ cd dashboard && npm install && npm run build && npm run start   # http://localho
 | `CTRADER_ACCOUNT_ID` | `48184979` = live účet (login 2079276) |
 | `CTRADER_DEMO` | `0` = live, `1` = demo (vlastná DB aj Telegram prefix) |
 | `CTRADER_QTY` | objem na vstup v jednotkách |
+| `CTRADER_BAND_LOW` | pod touto cenou sa **neotvárajú shorty** (default 1,1250) |
+| `CTRADER_BAND_HIGH` | nad touto cenou sa **neotvárajú longy** (default 1,1600) |
 | `CTRADER_SWAP_AUTO` | `0` vypne automatiku krokov podľa swapov |
 | `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` | notifikácie a príkazy |
 | `SUPABASE_URL`, `SUPABASE_SERVICE_KEY` | zrkadlenie do dashboardu |
@@ -165,3 +167,7 @@ alebo odmietnutia `PGRST`.
 - **Geometria gridu.** Lab overil len G2B (krok 0,15 % / 0,225 %). Automatika
   podľa swapov nastavuje hustejšie kroky — je to vedomý experiment, nie
   lab-validovaný stav.
+- **Pásmo nie je symetrická ochrana.** `band_low` vypína len **shorty**,
+  `band_high` len **longy**. Pod dolnou hranou teda longy pribúdajú ďalej —
+  pásmo nie je stop. Kto chce zastaviť nakupovanie pri páde, potrebuje
+  pauzu vstupov alebo vypnutie strany, nie posun pásma.
