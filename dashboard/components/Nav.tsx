@@ -37,6 +37,7 @@ function EnvToggle() {
 const MAIN = [
   { href: "/", label: "Prehľad", icon: HomeIcon },
   { href: "/pnl", label: "P/L", icon: ChartIcon },
+  { href: "/mapa", label: "Mapa", icon: MapIcon },
   { href: "/calendar", label: "Kalendár", icon: CalendarIcon },
 ];
 const MORE = [
@@ -155,6 +156,9 @@ function ClockIcon() {
 }
 function CalendarIcon() {
   return <svg {...S}><rect x="3" y="5" width="18" height="16" rx="2" /><path d="M8 3v4M16 3v4M3 10h18" /></svg>;
+}
+function MapIcon() {
+  return <svg {...S}><path d="M4 20V7l5-3 6 3 5-3v13l-5 3-6-3-5 3Z" /><path d="M9 4v13M15 7v13" /></svg>;
 }
 function DotsIcon() {
   return <svg {...S}><circle cx="5" cy="12" r="1.2" /><circle cx="12" cy="12" r="1.2" /><circle cx="19" cy="12" r="1.2" /></svg>;

@@ -21,6 +21,7 @@
   --color-warn: var(--warn);
   --color-long: var(--long);
   --color-short: var(--short);
+  --color-fund: var(--fund);
   --color-longbg: var(--longbg);
   --color-shortbg: var(--shortbg);
 }
@@ -38,8 +39,9 @@
   --pos: #0f6e56;
   --neg: #a32d2d;
   --warn: #854f0b;
-  --long: #0f6e56;
-  --short: #185fa5;
+  --long: #077a5b;
+  --short: #1550b0;
+  --fund: #a8571a;
   --longbg: #e1f5ee;
   --shortbg: #e6f1fb;
 }
@@ -57,8 +59,9 @@
   --pos: #5dcaa5;
   --neg: #f09595;
   --warn: #ef9f27;
-  --long: #5dcaa5;
-  --short: #85b7eb;
+  --long: #3aa782;
+  --short: #5a97e0;
+  --fund: #c2812f;
   --longbg: #04342c;
   --shortbg: #042c53;
 }
