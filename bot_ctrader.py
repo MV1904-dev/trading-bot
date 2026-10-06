@@ -90,7 +90,7 @@ class CTraderBotConfig:
     # a menia sa cez .env bez zásahu do kódu — pásmo sa posúva podľa trhu
     # častejšie než čokoľvek iné.
     BAND_LOW: float = field(
-        default_factory=lambda: float(os.getenv("CTRADER_BAND_LOW", "1.1250")))
+        default_factory=lambda: float(os.getenv("CTRADER_BAND_LOW", "1.1200")))
     BAND_HIGH: float = field(
         default_factory=lambda: float(os.getenv("CTRADER_BAND_HIGH", "1.1600")))
     SWAP_TIERS: tuple = (
