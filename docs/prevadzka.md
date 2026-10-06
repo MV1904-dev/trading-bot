@@ -167,6 +167,11 @@ alebo odmietnutia `PGRST`.
 - **Geometria gridu.** Lab overil len G2B (krok 0,15 % / 0,225 %). Automatika
   podľa swapov nastavuje hustejšie kroky — je to vedomý experiment, nie
   lab-validovaný stav.
+- **Kotva gridu je posledný vstup, nie extrém.** Odstup medzi vstupmi je
+  tým pádom vždy aspoň jeden krok. Do 6. 10. 2026 to boli bežiace extrémy
+  a každý medzipokles kotvu stiahol — shorty vtedy padali 4–6 pipov od seba
+  pri kroku 11,2 a 31 otvorených pozícií stlačilo margin level na 99,6 %.
+  Kotvy sa obnovujú aj po reštarte (`restore`), inak by sa odstup rozbil.
 - **Pásmo nie je symetrická ochrana.** `band_low` vypína len **shorty**,
   `band_high` len **longy**. Pod dolnou hranou teda longy pribúdajú ďalej —
   pásmo nie je stop. Kto chce zastaviť nakupovanie pri páde, potrebuje

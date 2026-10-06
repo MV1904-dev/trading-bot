@@ -76,15 +76,37 @@ class Grid25(StrategyBase):
             self.last_long = self.last_long or max(self.longs.values())
         if self.shorts:
             self.last_short = self.last_short or min(self.shorts.values())
+        # Kotvy musia reštart prežiť. Kým boli bežiace extrémy, dopočítali
+        # sa z prvého baru samy; pri kotve na poslednom vstupe by sa tým
+        # odstup po každom reštarte rozbil. Posledný vstup = najvyššie
+        # trade_id (rastie monotónne), nie extrém — po flat resete a novom
+        # vstupe by extrém ukazoval inam.
+        if self.longs:
+            self.ref_long = self.longs[max(self.longs)]
+        if self.shorts:
+            self.ref_short = self.shorts[max(self.shorts)]
 
     # --- jadro -------------------------------------------------------------
     def on_bar(self, bar: Bar, atr: Optional[float]) -> list[Signal]:
         c = bar.close
         cfg = self.cfg
 
-        # inicializácia / update referenčných extrémov
-        self.ref_long = max(self.ref_long or c, bar.high)
-        self.ref_short = min(self.ref_short or c, bar.low)
+        # Kotva = POSLEDNÝ VSTUP danej strany (zadanie Mariána 6. 10. 2026).
+        #
+        # Predtým to boli bežiace extrémy (max high / min low). Spúšť tým
+        # merala pohyb od posledného dna, nie od posledného vstupu, takže
+        # každý medzipokles kotvu stiahol a ďalší vstup padol bližšie, než
+        # je krok. Reálne odstupy shortov 6. 10. boli 4,3 / 5,8 / 4,7 pipu
+        # pri nastavenom kroku 11,2 — pozícia navyše je 333 € marže, čo pri
+        # 31 otvorených pozíciách stlačilo margin level na 99,6 %.
+        #
+        # Kotva sa teraz mení len na dvoch miestach: pri vstupe (on_trade_
+        # opened) a keď strana ostane prázdna (on_trade_closed). Odstup
+        # medzi vstupmi je tým pádom vždy aspoň jeden krok.
+        if self.ref_long is None:
+            self.ref_long = c
+        if self.ref_short is None:
+            self.ref_short = c
 
         if atr is None:
             return []
