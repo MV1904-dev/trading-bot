@@ -56,7 +56,7 @@ export default function PositionList({
                 {age(p.opened_at)}
               </span>
               <span className={`num ml-auto ${pnlClass(p.pnl_float)}`}>
-                {signed(p.pnl_float)}
+                {signed(p.pnl_float, 0)}
               </span>
             </>
           }
@@ -65,7 +65,7 @@ export default function PositionList({
           <Detail label="Take profit" value={price(p.tp_price)} />
           <Detail
             label="Swap za držanie"
-            value={signed(p.funding_usd)}
+            value={signed(p.funding_usd, 0)}
             tone={pnlClass(p.funding_usd)}
           />
           <Detail label="Stratégia" value={p.strategy} />
@@ -97,7 +97,7 @@ export default function PositionList({
               {confirming.side === "long" ? "Long" : "Short"}{" "}
               {money(confirming.qty, 0)} @ {price(confirming.entry_price)} ·{" "}
               <span className={pnlClass(confirming.pnl_float)}>
-                {signed(confirming.pnl_float)}
+                {signed(confirming.pnl_float, 0)}
               </span>
             </p>
             <p className="mt-2 text-xs text-faint">

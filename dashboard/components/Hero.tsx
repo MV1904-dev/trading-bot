@@ -41,16 +41,13 @@ export default function Hero({
   const dead = now - new Date(state.heartbeat_at).getTime() > STALE_MS;
   const frozen = now - new Date(state.updated_at).getTime() > STALE_MS;
   const stale = dead || frozen;
-  const equity = state.equity ?? state.balance ?? 0;
   const deposits = state.deposits_net ?? 0;
-  const roi = deposits > 0 ? ((equity - deposits) / deposits) * 100 : null;
 
-  // Celkom = equity − vklady, teda realizované aj plávajúce. Výnos je
-  // to isté v percentách vkladov. Bez vkladov sa nedá ani jedno: demo
-  // archív ich hlási ako 0 (cash_flow k nemu nič nevracia) a celý zostatok
-  // by vyzeral ako zisk.
-  const total = deposits > 0 ? equity - deposits : null;
-  // Realizovaný = balance − vklady: len zatvorené obchody, bez floatu.
+  // Rozklad výsledku (zadanie 15. 10. 2026): Celkom = Realizovaný + Float
+  // + Swapy. Equity zo snapshotu je balance + cenový float, naakumulovaný
+  // swap otvorených pozícií v ňom nie je — broker ho strhne až pri
+  // zatvorení, ale je to už vzniknutý náklad, tak patrí do celku.
+  // Bez vkladov (demo archív ich hlási ako 0) sa nedá nič z toho.
   const realized = deposits > 0 && state.balance != null ? state.balance - deposits : null;
 
   const today = botToday(now);
@@ -58,6 +55,8 @@ export default function Hero({
   const todayPnl = todayRows.reduce((a, d) => a + (Number(d.pnl_usd) || 0), 0);
   const floating = positions.reduce((a, p) => a + (Number(p.pnl_float) || 0), 0);
   const openSwap = positions.reduce((a, p) => a + (Number(p.funding_usd) || 0), 0);
+  const total = realized == null ? null : realized + floating + openSwap;
+  const roi = total == null ? null : (total / deposits) * 100;
 
   const ml = state.margin_level;
   const marginTone = ml != null && ml < 100 ? "text-neg" : ml != null && ml < 200 ? "text-warn" : "";
@@ -128,21 +127,24 @@ export default function Hero({
         </button>
       </div>
 
+      {/* 1. účet: koľko som vložil → koľko je výsledok → v percentách
+          2. z čoho sa výsledok skladá: Realizovaný + Float + Swapy = Celkom
+          3. teraz: dnešok, rezerva marže, najbližší blackout */}
       <div className="mt-3 grid grid-cols-3 gap-2">
-        <Tile label="Celkom" value={total == null ? "—" : signed(total)}
+        <Tile label="Vklady" value={deposits > 0 ? money(deposits, 0) : "—"} />
+        <Tile label="Celkom" value={total == null ? "—" : signed(total, 0)}
               tone={pnlClass(total)} />
-        <Tile label="Dnes" value={signed(todayPnl)} tone={pnlClass(todayPnl)} />
         <Tile label="Výnos" tone={pnlClass(total)}
               value={roi == null ? "—" : `${signed(roi)} %`} />
 
-        <Tile label="Vklady" value={deposits > 0 ? money(deposits) : "—"} />
-        <Tile label="Voľná marža" value={money(state.free_margin)} tone={marginTone}
-              sub={ml == null ? undefined : `marža ${ml.toFixed(0)} %`} />
-        <Tile label="Float" value={signed(floating)} tone={pnlClass(floating)} />
-
-        <Tile label="Realizovaný" value={realized == null ? "—" : signed(realized)}
+        <Tile label="Realizovaný" value={realized == null ? "—" : signed(realized, 0)}
               tone={pnlClass(realized)} />
-        <Tile label="Swapy" value={signed(openSwap)} tone={pnlClass(openSwap)} />
+        <Tile label="Float" value={signed(floating, 0)} tone={pnlClass(floating)} />
+        <Tile label="Swapy" value={signed(openSwap, 0)} tone={pnlClass(openSwap)} />
+
+        <Tile label="Dnes" value={signed(todayPnl, 0)} tone={pnlClass(todayPnl)} />
+        <Tile label="Voľná marža" value={money(state.free_margin, 0)} tone={marginTone}
+              sub={ml == null ? undefined : `marža ${ml.toFixed(0)} %`} />
         <Tile label="Blackout" value={blackout.value} tone={blackout.tone} />
       </div>
 

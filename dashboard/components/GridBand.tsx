@@ -28,8 +28,6 @@ type Level = { p: number; allowed: boolean };
 const pipw = (n: number) => (n === 1 ? "pip" : n >= 2 && n <= 4 ? "pipy" : "pipov");
 const pips = (n: number) => `${n} ${pipw(n)}`;
 const pipsTo = (a: number, b: number) => Math.round(Math.abs(a - b) * 10000);
-const p4 = (v: number) =>
-  v.toLocaleString("sk-SK", { minimumFractionDigits: 4, maximumFractionDigits: 4 });
 
 function ladder(
   side: "long" | "short", first: number, step: number,
@@ -99,21 +97,6 @@ export default function GridBand({ state }: { state: BotState | null }) {
   const sides = [
     { lad: ladS, main: mainS, idx: idxS, color: "var(--short)", label: "short", on: stepS != null },
     { lad: ladL, main: mainL, idx: idxL, color: "var(--long)", label: "long", on: stepL != null },
-  ];
-
-  const rows: [string, string][] = [
-    ["Otvorí short pri", stepS == null ? "vypnutý — drahé držanie"
-      : !mainS ? "za hranou pásma"
-      : pipsTo(mainS.p, px) === 0 ? "hneď"
-      : `${fmtPrice(mainS.p)} · ${pips(pipsTo(mainS.p, px))} vyššie`],
-    ["Otvorí long pri", stepL == null ? "vypnutý — drahé držanie"
-      : !mainL ? `až pod ${p4(hi)}`
-      : pipsTo(mainL.p, px) === 0 ? "hneď"
-      : `${fmtPrice(mainL.p)} · ${pips(pipsTo(mainL.p, px))} nižšie`],
-    ["Horná hrana", `${p4(hi)} · ${pips(pipsTo(hi, px))} ${hi >= px ? "nad" : "pod"}`],
-    ["Dolná hrana", `${p4(lo)} · ${pips(pipsTo(lo, px))} ${lo >= px ? "nad" : "pod"}`],
-    ["Ďalšie short úrovne", ladS.length > 1 ? ladS.slice(1).map((l) => fmtPrice(l.p)).join(" · ") : "—"],
-    ["Ďalšie long úrovne", ladL.length > 1 ? ladL.slice(1).map((l) => fmtPrice(l.p)).join(" · ") : "—"],
   ];
 
   // Popisky strán nie sú ani text v grafe, ani dlaždice pod ním — sú to
@@ -222,22 +205,6 @@ export default function GridBand({ state }: { state: BotState | null }) {
 
       {offNote && <p className="text-center text-xs text-warn">{offNote}</p>}
 
-      <details className="group">
-        <summary className="cursor-pointer list-none text-xs text-faint
-                            hover:text-muted">
-          Úrovne a hrany pásma
-          <span className="ml-1 inline-block transition-transform
-                           group-open:rotate-90">›</span>
-        </summary>
-        <dl className="mt-2 grid grid-cols-2 gap-x-4 gap-y-2 text-xs">
-          {rows.map(([k, v]) => (
-            <div key={k}>
-              <dt className="text-faint">{k}</dt>
-              <dd className="tabular-nums">{v}</dd>
-            </div>
-          ))}
-        </dl>
-      </details>
     </div>
   );
 }
