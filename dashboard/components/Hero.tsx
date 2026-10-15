@@ -10,9 +10,9 @@ import type { BotState, CalendarEvent, DailyCycle, Position } from "@/lib/types"
 const STALE_MS = 3 * 60 * 1000;
 
 /**
- * Horná časť prehľadu: riadok stavu s pauzou a pod ním dlaždice v troch
- * radoch — výsledok (celkom, dnes, výnos), kapitál (vklady, voľná marža,
- * float) a náklady s rizikom (swapy, dnešný blackout). Zadanie 15. 10. 2026.
+ * Horná časť prehľadu: riadok stavu s pauzou a pod ním dlaždice 3 × 3 —
+ * výsledok (celkom, dnes, výnos), kapitál (vklady, voľná marža, float)
+ * a realizovaný zisk, swapy a najbližší blackout. Zadanie 15. 10. 2026.
  */
 export default function Hero({
   state,
@@ -50,6 +50,8 @@ export default function Hero({
   // archív ich hlási ako 0 (cash_flow k nemu nič nevracia) a celý zostatok
   // by vyzeral ako zisk.
   const total = deposits > 0 ? equity - deposits : null;
+  // Realizovaný = balance − vklady: len zatvorené obchody, bez floatu.
+  const realized = deposits > 0 && state.balance != null ? state.balance - deposits : null;
 
   const today = botToday(now);
   const todayRows = daily.filter((d) => d.day === today);
@@ -60,36 +62,27 @@ export default function Hero({
   const ml = state.margin_level;
   const marginTone = ml != null && ml < 100 ? "text-neg" : ml != null && ml < 200 ? "text-warn" : "";
 
-  // Blackout: najbližšie okno ±BLACKOUT_MIN okolo high-impact udalosti,
-  // ktoré ešte neskončilo. calendar_events nesie len udalosti, z ktorých bot
-  // blackout naozaj robí. Udalosti v rovnakom čase sú JEDNO okno (napr. PPI
-  // a Retail Sales o 14:30), nie viac blackoutov. Keď dnes už žiadny nie je,
-  // ukáže sa zajtrajší — večer je to užitočnejšie než „žiadny".
+  // Blackout: začiatok najbližšieho okna ±BLACKOUT_MIN okolo high-impact
+  // udalosti, ktoré ešte neskončilo (calendar_events = len udalosti, z ktorých
+  // bot blackout naozaj robí). Bez textov (zadanie 15. 10. 2026): dnes žlto,
+  // iný deň sivo a v zátvorke počet dní; počas okna "do HH:MM".
   const win = BLACKOUT_MIN * 60_000;
   const hm = (t: number) => new Date(t).toLocaleTimeString("sk-SK",
     { hour: "2-digit", minute: "2-digit", timeZone: BOT_TZ });
-  const tomorrow = botToday(now + 86_400_000);
-  const upcoming = events
-    .map((e) => ({ ...e, t: new Date(e.ts).getTime() }))
-    .filter((e) => e.t + win > now)
-    .sort((a, b) => a.t - b.t);
-  const next = upcoming[0];
-  const nextDay = next ? botToday(next.t) : null;
-  const group = next ? upcoming.filter((e) => e.t === next.t) : [];
-  const what = next
-    ? `${[...new Set(group.map((e) => e.currency))].join("/")} · ${next.title}`
-      + (group.length > 1 ? ` +${group.length - 1}` : "")
-    : undefined;
+  const dayNo = (t: number) => Date.parse(`${botToday(t)}T00:00:00Z`) / 86_400_000;
+  const next = events
+    .map((e) => new Date(e.ts).getTime())
+    .filter((t) => t + win > now)
+    .sort((a, b) => a - b)[0];
+  const inDays = next == null ? null : dayNo(next) - dayNo(now);
   const blackout =
-    events.length === 0
-      ? { label: "Blackout dnes", value: "—", tone: "text-faint", sub: "kalendár je prázdny" }
-      : !next || (nextDay !== today && nextDay !== tomorrow)
-        ? { label: "Blackout dnes", value: "žiadny", tone: "text-faint", sub: undefined }
-        : next.t - win <= now
-          ? { label: "Blackout teraz", value: `do ${hm(next.t + win)}`, tone: "text-warn", sub: what }
-          : { label: nextDay === today ? "Blackout dnes" : "Blackout zajtra",
-              value: `${hm(next.t - win)}–${hm(next.t + win)}`,
-              tone: nextDay === today ? "text-warn" : "", sub: what };
+    next == null
+      ? { value: "—", tone: "text-faint" }
+      : next - win <= now
+        ? { value: `do ${hm(next + win)}`, tone: "text-warn" }
+        : inDays === 0
+          ? { value: hm(next - win), tone: "text-warn" }
+          : { value: `${hm(next - win)} (${inDays})`, tone: "text-faint" };
 
   const tone = dead
     ? { dot: "bg-faint", text: "Bez spojenia" }
@@ -147,9 +140,10 @@ export default function Hero({
               sub={ml == null ? undefined : `marža ${ml.toFixed(0)} %`} />
         <Tile label="Float" value={signed(floating)} tone={pnlClass(floating)} />
 
+        <Tile label="Realizovaný" value={realized == null ? "—" : signed(realized)}
+              tone={pnlClass(realized)} />
         <Tile label="Swapy" value={signed(openSwap)} tone={pnlClass(openSwap)} />
-        <Tile label={blackout.label} value={blackout.value} tone={blackout.tone}
-              sub={blackout.sub} className="col-span-2" />
+        <Tile label="Blackout" value={blackout.value} tone={blackout.tone} />
       </div>
 
       {state.blocked_reason && (
