@@ -93,7 +93,7 @@ def _fetch_day(d: date) -> list[tuple]:
         raw = cache.read_bytes()
     else:
         url = DUKA.format(y=d.year, m=d.month - 1, d=d.day)
-        for attempt in range(6):
+        for attempt in range(10):
             try:
                 raw = urllib.request.urlopen(
                     urllib.request.Request(url, headers=UA), timeout=60).read()
@@ -105,9 +105,11 @@ def _fetch_day(d: date) -> list[tuple]:
                 err = exc
             except (urllib.error.URLError, ConnectionError, TimeoutError) as exc:
                 err = exc
-            time.sleep(2 ** attempt)        # Dukascopy pri náraze resetuje
+            time.sleep(min(60, 2 ** attempt))   # Dukascopy pri náraze resetuje
         else:
-            raise RuntimeError(f"{d}: {err}")
+            if d.weekday() != 5:
+                raise RuntimeError(f"{d}: {err}")
+            raw = b""                       # sobota: FX sa neobchoduje
         if d < today:                      # dnešok je neúplný, necachujeme
             cache.write_bytes(raw)
     if not raw:
@@ -131,7 +133,7 @@ def load_m5(start: date, end: date) -> list[tuple]:
             return [(int(r[0]), *map(float, r[1:])) for r in csv.reader(f)]
     (DATA / "m1").mkdir(parents=True, exist_ok=True)
     days = [start + timedelta(i) for i in range((end - start).days + 1)]
-    with ThreadPoolExecutor(4) as ex:
+    with ThreadPoolExecutor(2) as ex:
         m1 = [row for day in ex.map(_fetch_day, days) for row in day]
     m1.sort()
     bars: list[list] = []
