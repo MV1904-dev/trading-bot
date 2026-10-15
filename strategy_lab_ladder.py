@@ -263,8 +263,14 @@ class Book:
 
 # --- stratégie --------------------------------------------------------------
 
-def sim_g2b(bars, steps, capital, outage=None, name="G2B-CT") -> Book:
-    """Verná kópia Grid25.on_bar + toho, ako ho volá bot_ctrader."""
+def sim_g2b(bars, steps, capital, outage=None, name="G2B-CT",
+            anchor: str = "extreme") -> Book:
+    """Verná kópia Grid25.on_bar + toho, ako ho volá bot_ctrader.
+
+    anchor="extreme" — kotva je bežiace max/min (tak bot bežal do #16),
+    anchor="entry"   — kotva je posledný vstup, mení sa len pri vstupe
+                       a pri vyprázdnení strany (#16, 6. 10. 2026),
+    anchor="hybrid"  — ako "entry", ale prázdna strana sleduje extrém."""
     bk = Book(name, capital)
     ref_l = ref_s = None
     last_l = last_s = 0.0
@@ -292,10 +298,19 @@ def sim_g2b(bars, steps, capital, outage=None, name="G2B-CT") -> Book:
             continue                       # bot nebeží: ani kotva, ani vstup
 
         step_l, step_s = steps(t)
-        ref_l = max(ref_l or c, h)
-        ref_s = min(ref_s or c, l)
         n_l = sum(p.side == "long" for p in bk.open)
         n_s = len(bk.open) - n_l
+        if anchor == "extreme":
+            ref_l = max(ref_l or c, h)
+            ref_s = min(ref_s or c, l)
+        elif anchor == "hybrid":
+            # prázdna strana sleduje extrém (inak zamrzne, keď trh odíde),
+            # strana s pozíciou drží kotvu na poslednom vstupe (odstup ≥ krok)
+            ref_l = max(ref_l or c, h) if n_l == 0 else ref_l
+            ref_s = min(ref_s or c, l) if n_s == 0 else ref_s
+        else:
+            ref_l = c if ref_l is None else ref_l
+            ref_s = c if ref_s is None else ref_s
 
         if c < BAND_HIGH and n_l < CAP:
             drop = ref_l - c
@@ -414,6 +429,10 @@ def main() -> int:
           f"{datetime.fromtimestamp(bars[-1][0], timezone.utc):%Y-%m-%d %H:%M}")
     live = [
         sim_g2b(bars, steps_live, 15_200, OUTAGE, "G2B-CT (ako bežal)"),
+        sim_g2b(bars, steps_live, 15_200, OUTAGE, "G2B kotva=vstup (#16)",
+                anchor="entry"),
+        sim_g2b(bars, steps_live, 15_200, OUTAGE, "G2B hybrid",
+                anchor="hybrid"),
         sim_ladder(bars, 0.001, 15_200, OUTAGE, "MRIEŽKA 0,10 %"),
         sim_ladder(bars, 0.0015, 15_200, OUTAGE, "MRIEŽKA 0,15 %"),
     ]
@@ -433,6 +452,10 @@ def main() -> int:
     table([
         sim_g2b(bars2, lambda t: (0.00225, 0.0015), 15_200, None, "G2B lab"),
         sim_g2b(bars2, lambda t: (0.0015, 0.0010), 15_200, None, "G2B dnešné kroky"),
+        sim_g2b(bars2, lambda t: (0.0015, 0.0010), 15_200, None, "G2B #16 dnešné",
+                anchor="entry"),
+        sim_g2b(bars2, lambda t: (0.0015, 0.0010), 15_200, None, "G2B hybrid dnešné",
+                anchor="hybrid"),
         sim_ladder(bars2, 0.001, 15_200, None, "MRIEŽKA 0,10 %"),
         sim_ladder(bars2, 0.0015, 15_200, None, "MRIEŽKA 0,15 %"),
     ], "B) LAB — 2 ROKY HISTÓRIE, kapitál 15 200")
