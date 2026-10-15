@@ -58,11 +58,17 @@ export default function Hero({
   const total = realized == null ? null : realized + floating + openSwap;
   const roi = total == null ? null : (total / deposits) * 100;
 
-  // Marža zo zložiek, nie zo stavu bota: jeho equity je balance + cenový
-  // float a naakumulovaný swap otvorených pozícií v nej chýba, takže voľná
-  // marža aj úroveň vychádzali vyššie (15. 10. o 339 € / 3,6 b. b.).
-  // Využitú maržu hlási broker po pozíciách, tá sedí.
-  const used = Number(state.used_margin) || 0;
+  // Marža zo zložiek, nie zo stavu bota — overené proti aplikácii brokera
+  // 15. 10. 22:45 (159 %, voľná 4 881,72, použitá 8 333,25):
+  //  - equity bota je balance + cenový float, chýba v nej naakumulovaný swap
+  //    otvorených pozícií; tu sa pripočíta,
+  //  - bot sčíta usedMargin všetkých pozícií, ale cTrader pri protismerných
+  //    pozíciách na jednom páre účtuje maržu len z väčšej strany (hedging).
+  //    Pri 25 long / 3 short je to 25 × 333,33 = 8 333,25, nie 9 333,24.
+  const qtyL = positions.reduce((a, p) => a + (p.side === "long" ? Number(p.qty) || 0 : 0), 0);
+  const qtyS = positions.reduce((a, p) => a + (p.side === "short" ? Number(p.qty) || 0 : 0), 0);
+  const usedSum = Number(state.used_margin) || 0;
+  const used = qtyL + qtyS > 0 ? (usedSum * Math.max(qtyL, qtyS)) / (qtyL + qtyS) : 0;
   const eqTrue = state.balance != null ? state.balance + floating + openSwap : null;
   const freeMargin = eqTrue == null ? state.free_margin : eqTrue - used;
   const ml = eqTrue != null && used > 0 ? (eqTrue / used) * 100 : state.margin_level;
