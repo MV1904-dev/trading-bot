@@ -58,7 +58,14 @@ export default function Hero({
   const total = realized == null ? null : realized + floating + openSwap;
   const roi = total == null ? null : (total / deposits) * 100;
 
-  const ml = state.margin_level;
+  // Marža zo zložiek, nie zo stavu bota: jeho equity je balance + cenový
+  // float a naakumulovaný swap otvorených pozícií v nej chýba, takže voľná
+  // marža aj úroveň vychádzali vyššie (15. 10. o 339 € / 3,6 b. b.).
+  // Využitú maržu hlási broker po pozíciách, tá sedí.
+  const used = Number(state.used_margin) || 0;
+  const eqTrue = state.balance != null ? state.balance + floating + openSwap : null;
+  const freeMargin = eqTrue == null ? state.free_margin : eqTrue - used;
+  const ml = eqTrue != null && used > 0 ? (eqTrue / used) * 100 : state.margin_level;
   const marginTone = ml != null && ml < 100 ? "text-neg" : ml != null && ml < 200 ? "text-warn" : "";
 
   // Blackout: začiatok najbližšieho okna ±BLACKOUT_MIN okolo high-impact
@@ -143,7 +150,7 @@ export default function Hero({
         <Tile label="Swapy" value={signed(openSwap, 0)} tone={pnlClass(openSwap)} />
 
         <Tile label="Dnes" value={signed(todayPnl, 0)} tone={pnlClass(todayPnl)} />
-        <Tile label="Voľná marža" value={money(state.free_margin, 0)} tone={marginTone}
+        <Tile label="Voľná marža" value={money(freeMargin, 0)} tone={marginTone}
               sub={ml == null ? undefined : `marža ${ml.toFixed(0)} %`} />
         <Tile label="Blackout" value={blackout.value} tone={blackout.tone} />
       </div>
