@@ -37,6 +37,10 @@ export function fxMarketClosed(now: number): boolean {
  */
 export const BOT_TZ = "Europe/Bratislava";
 
+/** Bot nevstupuje ±tento počet minút okolo high-impact udalosti
+    (trading/macro.py, BLACKOUT_S). */
+export const BLACKOUT_MIN = 30;
+
 /** Dnešný dátum v čase bota ako YYYY-MM-DD — kľúč do `daily_cycles`. */
 export function botToday(now: number = Date.now()): string {
   const parts = new Intl.DateTimeFormat("en-US", {

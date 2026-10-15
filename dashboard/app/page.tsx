@@ -3,11 +3,10 @@
 import GridBand from "@/components/GridBand";
 import Hero from "@/components/Hero";
 import PositionList from "@/components/PositionList";
-import { Section, Tile } from "@/components/ui";
+import { Section } from "@/components/ui";
 import { useLive } from "@/lib/useLive";
 import { useEnv } from "@/lib/env";
-import { money, pnlClass, signed } from "@/lib/format";
-import type { BotState, DailyCycle, Position } from "@/lib/types";
+import type { BotState, CalendarEvent, DailyCycle, Position } from "@/lib/types";
 
 export default function Overview() {
   const { env } = useEnv();
@@ -23,34 +22,18 @@ export default function Overview() {
     q.select("*").eq("env", env).order("day", { ascending: false }).limit(400),
     [env],
   );
-  const refreshAll = () => { r1(); r2(); r3(); };
+  // Kalendár je spoločný pre demo aj live — blackout platí rovnako.
+  const { rows: events, reload: r4 } = useLive<CalendarEvent>("calendar_events", (q) =>
+    q.select("*").order("ts", { ascending: true }).limit(500),
+  );
+  const refreshAll = () => { r1(); r2(); r3(); r4(); };
 
   const state = states[0] ?? null;
-  const openSwap = positions.reduce((a, p) => a + (Number(p.funding_usd) || 0), 0);
-  const swapRatio =
-    state?.swap_long != null && state?.swap_short
-      ? Math.abs(state.swap_long / state.swap_short)
-      : null;
 
   return (
     <main>
-      <Hero state={state} positions={positions} daily={daily} onRefresh={refreshAll} />
-
-      <Section
-        title="Kapitál"
-        info="Marža pod 200 % je žltá, pod 100 % červená; broker začne zatvárať pozície sám pri 50 %. Swap = naakumulovaný náklad za držanie otvorených pozícií cez noc, priamo z brokera. Long vs short = koľkokrát drahšia je drahšia strana."
-      >
-        {/* Využitá marža je len equity − voľná; dala sa dopočítať z dvoch
-            čísel, ktoré už na stránke sú, tak zabrala dlaždicu zbytočne. */}
-        <div className="grid grid-cols-3 gap-2">
-          <Tile label="Voľná marža" value={money(state?.free_margin)} />
-          <Tile label="Swap" value={signed(openSwap)} tone={pnlClass(openSwap)} />
-          <Tile
-            label="Long vs short"
-            value={swapRatio == null ? "—" : `${swapRatio.toFixed(0)}×`}
-          />
-        </div>
-      </Section>
+      <Hero state={state} positions={positions} daily={daily} events={events}
+            onRefresh={refreshAll} />
 
       <Section
         title="Pásmo a najbližšie vstupy"

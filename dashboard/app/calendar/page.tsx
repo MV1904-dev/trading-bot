@@ -3,10 +3,10 @@
 import { useLive } from "@/lib/useLive";
 import { useEnv } from "@/lib/env";
 import { dateTime } from "@/lib/format";
+import { BLACKOUT_MIN } from "@/lib/market";
 import { Empty, Section } from "@/components/ui";
 import type { CalendarEvent, DailyCycle } from "@/lib/types";
 
-const BLACKOUT_MIN = 30;
 
 export default function CalendarPage() {
   const { env } = useEnv();

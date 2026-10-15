@@ -76,17 +76,19 @@ export function Tile({
   value,
   tone = "",
   sub,
+  className = "",
 }: {
   label: string;
   value: string;
   tone?: string;
   sub?: string;
+  className?: string;
 }) {
   return (
-    <div className="tile">
+    <div className={`tile ${className}`}>
       <div className="tile-label">{label}</div>
       <div className={`tile-value ${tone}`}>{value}</div>
-      {sub && <div className="mt-0.5 text-[11px] text-faint">{sub}</div>}
+      {sub && <div className="mt-0.5 truncate text-[11px] text-faint" title={sub}>{sub}</div>}
     </div>
   );
 }

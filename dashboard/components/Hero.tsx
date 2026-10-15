@@ -4,25 +4,27 @@ import { useState } from "react";
 import { createClient } from "@/lib/supabase";
 import { dateTime, money, pnlClass, signed } from "@/lib/format";
 import { DataStamp, RefreshButton, Tile } from "@/components/ui";
-import { botToday, fxMarketClosed } from "@/lib/market";
-import type { BotState, DailyCycle, Position } from "@/lib/types";
+import { BLACKOUT_MIN, BOT_TZ, botToday, fxMarketClosed } from "@/lib/market";
+import type { BotState, CalendarEvent, DailyCycle, Position } from "@/lib/types";
 
 const STALE_MS = 3 * 60 * 1000;
 
 /**
- * Horná tretina obrazovky: stav, jedno hlavné číslo, tri metriky.
- * Nahrádza pôvodných päť samostatných kariet, ktoré mali rovnakú váhu
- * a tlačili obsah pod okraj.
+ * Horná časť prehľadu: riadok stavu s pauzou a pod ním dlaždice v troch
+ * radoch — výsledok (celkom, dnes, výnos), kapitál (vklady, voľná marža,
+ * float) a náklady s rizikom (swapy, dnešný blackout). Zadanie 15. 10. 2026.
  */
 export default function Hero({
   state,
   positions,
   daily,
+  events,
   onRefresh,
 }: {
   state: BotState | null;
   positions: Position[];
   daily: DailyCycle[];
+  events: CalendarEvent[];
   onRefresh?: () => void;
 }) {
   const [busy, setBusy] = useState(false);
@@ -42,18 +44,52 @@ export default function Hero({
   const equity = state.equity ?? state.balance ?? 0;
   const deposits = state.deposits_net ?? 0;
   const roi = deposits > 0 ? ((equity - deposits) / deposits) * 100 : null;
-  // balance je hotovosť na účte (vklady + všetko zavreté), nie zisk. Sama
-  // o sebe nič nehovorí — zaujíma nás, koľko z nej stratégia zarobila.
-  // Vyčísliť sa to dá len proti vkladom: demo archív ich hlási ako 0
-  // (cash_flow k nemu nič nevracia) a balance − 0 by vyzeralo, akoby bol
-  // celý zostatok zarobený. Bez vkladov preto zisk neukazujeme vôbec.
-  const realized =
-    deposits > 0 && state.balance != null ? state.balance - deposits : null;
+
+  // Celkom = equity − vklady, teda realizované aj plávajúce. Výnos je
+  // to isté v percentách vkladov. Bez vkladov sa nedá ani jedno: demo
+  // archív ich hlási ako 0 (cash_flow k nemu nič nevracia) a celý zostatok
+  // by vyzeral ako zisk.
+  const total = deposits > 0 ? equity - deposits : null;
 
   const today = botToday(now);
   const todayRows = daily.filter((d) => d.day === today);
   const todayPnl = todayRows.reduce((a, d) => a + (Number(d.pnl_usd) || 0), 0);
   const floating = positions.reduce((a, p) => a + (Number(p.pnl_float) || 0), 0);
+  const openSwap = positions.reduce((a, p) => a + (Number(p.funding_usd) || 0), 0);
+
+  const ml = state.margin_level;
+  const marginTone = ml != null && ml < 100 ? "text-neg" : ml != null && ml < 200 ? "text-warn" : "";
+
+  // Blackout: najbližšie okno ±BLACKOUT_MIN okolo high-impact udalosti,
+  // ktoré ešte neskončilo. calendar_events nesie len udalosti, z ktorých bot
+  // blackout naozaj robí. Udalosti v rovnakom čase sú JEDNO okno (napr. PPI
+  // a Retail Sales o 14:30), nie viac blackoutov. Keď dnes už žiadny nie je,
+  // ukáže sa zajtrajší — večer je to užitočnejšie než „žiadny".
+  const win = BLACKOUT_MIN * 60_000;
+  const hm = (t: number) => new Date(t).toLocaleTimeString("sk-SK",
+    { hour: "2-digit", minute: "2-digit", timeZone: BOT_TZ });
+  const tomorrow = botToday(now + 86_400_000);
+  const upcoming = events
+    .map((e) => ({ ...e, t: new Date(e.ts).getTime() }))
+    .filter((e) => e.t + win > now)
+    .sort((a, b) => a.t - b.t);
+  const next = upcoming[0];
+  const nextDay = next ? botToday(next.t) : null;
+  const group = next ? upcoming.filter((e) => e.t === next.t) : [];
+  const what = next
+    ? `${[...new Set(group.map((e) => e.currency))].join("/")} · ${next.title}`
+      + (group.length > 1 ? ` +${group.length - 1}` : "")
+    : undefined;
+  const blackout =
+    events.length === 0
+      ? { label: "Blackout dnes", value: "—", tone: "text-faint", sub: "kalendár je prázdny" }
+      : !next || (nextDay !== today && nextDay !== tomorrow)
+        ? { label: "Blackout dnes", value: "žiadny", tone: "text-faint", sub: undefined }
+        : next.t - win <= now
+          ? { label: "Blackout teraz", value: `do ${hm(next.t + win)}`, tone: "text-warn", sub: what }
+          : { label: nextDay === today ? "Blackout dnes" : "Blackout zajtra",
+              value: `${hm(next.t - win)}–${hm(next.t + win)}`,
+              tone: nextDay === today ? "text-warn" : "", sub: what };
 
   const tone = dead
     ? { dot: "bg-faint", text: "Bez spojenia" }
@@ -99,43 +135,22 @@ export default function Hero({
         </button>
       </div>
 
-      <div className="mt-3 flex items-end gap-2.5">
-        <span className="num text-[29px] font-medium leading-none tracking-tight">
-          {money(equity)}
-        </span>
-        {roi != null && (
-          <span className={`num pb-0.5 text-sm ${pnlClass(equity - deposits)}`}>
-            {roi >= 0 ? "+" : ""}{roi.toFixed(2)} %
-          </span>
-        )}
-      </div>
-      <p className="mt-1 text-xs text-faint">
-        {realized != null ? (
-          <>
-            vklad {money(deposits)} · realizovaný zisk{" "}
-            <span className={pnlClass(realized)}>{signed(realized)}</span>
-          </>
-        ) : (
-          <>zostatok {money(state.balance)} · bez údaja o vkladoch sa zisk nedá vyčísliť</>
-        )}
-      </p>
-
       <div className="mt-3 grid grid-cols-3 gap-2">
+        <Tile label="Celkom" value={total == null ? "—" : signed(total)}
+              tone={pnlClass(total)} />
         <Tile label="Dnes" value={signed(todayPnl)} tone={pnlClass(todayPnl)} />
-        <Tile label="Float" value={signed(floating)} tone={pnlClass(floating)} />
-        <Tile
-          label="Marža"
-          value={state.margin_level == null ? "—" : `${state.margin_level.toFixed(0)} %`}
-          tone={
-            state.margin_level != null && state.margin_level < 100
-              ? "text-neg"
-              : state.margin_level != null && state.margin_level < 200
-                ? "text-warn"
-                : ""
-          }
-        />
-      </div>
+        <Tile label="Výnos" tone={pnlClass(total)}
+              value={roi == null ? "—" : `${signed(roi)} %`} />
 
+        <Tile label="Vklady" value={deposits > 0 ? money(deposits) : "—"} />
+        <Tile label="Voľná marža" value={money(state.free_margin)} tone={marginTone}
+              sub={ml == null ? undefined : `marža ${ml.toFixed(0)} %`} />
+        <Tile label="Float" value={signed(floating)} tone={pnlClass(floating)} />
+
+        <Tile label="Swapy" value={signed(openSwap)} tone={pnlClass(openSwap)} />
+        <Tile label={blackout.label} value={blackout.value} tone={blackout.tone}
+              sub={blackout.sub} className="col-span-2" />
+      </div>
 
       {state.blocked_reason && (
         <p className="mt-2 text-xs text-warn">Vstupy blokované: {state.blocked_reason}</p>
