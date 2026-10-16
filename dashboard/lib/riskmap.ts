@@ -2,9 +2,10 @@
  * Model „čo urobí bot a koľko to bude stáť" pre ľubovoľný kurz.
  *
  * Pásmo nie je symetrická ochrana: `band_low` vypína len shorty, `band_high`
- * len longy. Pod dolnou hranou teda longy pribúdajú ďalej, až kým sa nenaplní
- * kapacita strany — a práve to je vec, ktorú z čísel v hlavičke nikto
- * nevyčíta. Mapa to počíta dopredu pre celú os.
+ * len longy. Pod dolnou hranou teda longy pribúdajú ďalej a nad hornou
+ * shorty, až kým sa nenaplní kapacita strany — a práve to je vec, ktorú
+ * z čísel v hlavičke nikto nevyčíta. Mapa to počíta dopredu pre celú os,
+ * oboma smermi: pri páde rastú longy, pri raste shorty.
  *
  * Zámerné zjednodušenia (model, nie predpoveď):
  *  - cesta je jednosmerná; ak kurz po ceste osciluje, longy vyberú TP,
@@ -35,6 +36,7 @@ export type MapInput = {
   qty: number;
   cap: number;
   refLong: number;
+  refShort: number;
   longEnabled: boolean;
   shortEnabled: boolean;
   legs: Leg[];
@@ -81,6 +83,25 @@ function extraLongs(i: MapInput, to: number, volnych: number): number[] {
   return out;
 }
 
+/**
+ * Koľko ďalších shortov grid otvorí cestou z `from` hore na `to`. Short
+ * nemá ATR podlahu, len krok od kotvy — ako strategy_grid25 (rise ≥
+ * ref × step_short). Nad hornou hranou pásma sa shorty otvárajú ďalej.
+ */
+function extraShorts(i: MapInput, to: number, volnych: number): number[] {
+  if (!i.shortEnabled || to <= i.price || volnych <= 0) return [];
+  const out: number[] = [];
+  let ref = i.refShort || i.price;
+  while (out.length < volnych) {
+    // Pod dolnou hranou sa short neotvára — padne na prvom kurze nad ňou.
+    const next = Math.max(ref * (1 + i.stepShort), i.bandLow + 0.00001);
+    if (next > to) break;
+    out.push(next);
+    ref = next;
+  }
+  return out;
+}
+
 export function snapshotAt(i: MapInput, px: number): Snap {
   let balance = i.balance;
   const open: Leg[] = [];
@@ -88,15 +109,18 @@ export function snapshotAt(i: MapInput, px: number): Snap {
     if (hitTp(l, px)) balance += legPnl(l, l.tp!);
     else open.push(l);
   }
-  const volnych = i.cap - open.filter((l) => l.side === "long").length;
-  const pridane = extraLongs(i, px, volnych);
+  const openL = open.filter((l) => l.side === "long").length;
+  const openS = open.length - openL;
+  const pridaneL = extraLongs(i, px, i.cap - openL);
+  const pridaneS = extraShorts(i, px, i.cap - openS);
 
   const floating =
     open.reduce((a, l) => a + legPnl(l, px), 0) +
-    pridane.reduce((a, e) => a + legPnl({ side: "long", entry: e, tp: null, qty: i.qty }, px), 0);
+    pridaneL.reduce((a, e) => a + legPnl({ side: "long", entry: e, tp: null, qty: i.qty }, px), 0) +
+    pridaneS.reduce((a, e) => a + legPnl({ side: "short", entry: e, tp: null, qty: i.qty }, px), 0);
 
-  const longs = open.filter((l) => l.side === "long").length + pridane.length;
-  const shorts = open.length - (longs - pridane.length);
+  const longs = openL + pridaneL.length;
+  const shorts = openS + pridaneS.length;
   const used = Math.max(longs, shorts) * i.marginPer;
   const equity = balance + floating + i.swap;
 
@@ -120,6 +144,12 @@ export function futureLongs(i: MapInput, to: number): number[] {
   return extraLongs(i, to, i.cap - open);
 }
 
+/** Ceny, na ktorých by grid cestou hore otvoril ďalšie shorty (až po kapacitu). */
+export function futureShorts(i: MapInput, to: number): number[] {
+  const open = i.legs.filter((l) => l.side === "short").length;
+  return extraShorts(i, to, i.cap - open);
+}
+
 /** Rovnomerná vzorka celej osi; `step` je v cene, nie v pipoch. */
 export function scan(i: MapInput, from: number, to: number, step = 0.0005): Snap[] {
   const out: Snap[] = [];
@@ -129,10 +159,18 @@ export function scan(i: MapInput, from: number, to: number, step = 0.0005): Snap
   return out;
 }
 
-/** Najvyšší kurz, pri ktorom margin level klesne na danú hranicu. */
-export function thresholdPrice(snaps: Snap[], level: number): number | null {
-  const pod = snaps.filter((s) => s.level != null && s.level < level);
-  return pod.length ? Math.max(...pod.map((s) => s.price)) : null;
+/**
+ * Prvý kurz od aktuálneho daným smerom, pri ktorom margin level klesne pod
+ * hranicu: pri páde najvyšší taký kurz pod `from`, pri raste najnižší nad ním.
+ */
+export function thresholdPrice(
+  snaps: Snap[], level: number, from: number, dir: "down" | "up" = "down",
+): number | null {
+  const pod = snaps.filter((s) => s.level != null && s.level < level &&
+    (dir === "down" ? s.price <= from : s.price >= from));
+  if (!pod.length) return null;
+  const ceny = pod.map((s) => s.price);
+  return dir === "down" ? Math.max(...ceny) : Math.min(...ceny);
 }
 
 /** Zostaví vstup modelu zo živého stavu bota a otvorených pozícií. */
@@ -166,6 +204,7 @@ export function buildInput(
     qty,
     cap: (Number(c.base_levels) || 20) + (Number(c.reserve_levels) || 10),
     refLong: Number(c.ref_long) || price,
+    refShort: Number(c.ref_short) || price,
     longEnabled: c.long_enabled !== false,
     shortEnabled: c.short_enabled !== false,
     legs: positions.map((p) => ({

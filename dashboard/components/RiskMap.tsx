@@ -4,16 +4,18 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { money } from "@/lib/format";
 import { Empty, Tile } from "@/components/ui";
 import {
-  buildInput, futureLongs, scan, snapshotAt, thresholdPrice, type MapInput, type Snap,
+  buildInput, futureLongs, futureShorts, scan, snapshotAt, thresholdPrice, type MapInput, type Snap,
 } from "@/lib/riskmap";
 import type { BotState, Position } from "@/lib/types";
 
 /**
- * Mapa rizika (zadanie 16. 10. 2026, varianta A + C):
+ * Mapa rizika (zadanie 16. 10. 2026, varianta A + C), oboma smermi —
+ * pri páde pribúdajú longy, pri raste shorty a každý smer má vlastný
+ * margin call a stop-out:
  *  - vodorovný pás pozícií — rovnaký jazyk ako graf na Prehľade: cena
  *    zľava doprava, longy nad osou, shorty pod ňou, vybledlé čiarky sú
  *    longy, ktoré grid ešte otvorí; zvislé čiary margin call a stop-out,
- *  - pod ním scenár pádu — riadok po 50 pipoch od kurzu nadol s počtom
+ *  - pod ním scenár — riadok po 50 pipoch od kurzu hore aj dole s počtom
  *    pozícií, úrovňou marže a sumou na doliatie. Čísla sa čítajú priamo,
  *    nie odhadom z plochy grafu.
  *
@@ -49,53 +51,71 @@ export default function RiskMap({
     const input = buildInput(state, positions);
     if (!input) return null;
     const wide = scan(input, 1.0, 1.3, 0.0005);
+    const px = input.price;
     return {
       input,
-      call: thresholdPrice(wide, 100),
-      stop: thresholdPrice(wide, 50),
-      plan: futureLongs(input, 1.0),
+      lim: {
+        callDn: thresholdPrice(wide, 100, px, "down"),
+        stopDn: thresholdPrice(wide, 50, px, "down"),
+        callUp: thresholdPrice(wide, 100, px, "up"),
+        stopUp: thresholdPrice(wide, 50, px, "up"),
+      },
+      planL: futureLongs(input, 1.0),
+      planS: futureShorts(input, 1.3),
     };
   }, [state, positions]);
 
   if (!model) {
     return <Empty>Čakám na kurz, zostatok a otvorené pozície z bota.</Empty>;
   }
-  const { input, call, stop, plan } = model;
+  const { input, lim, planL, planS } = model;
   const px = input.price;
   const longs = input.legs.filter((l) => l.side === "long").length;
-  const full = plan.length ? plan[plan.length - 1] : null;
+  const shorts = input.legs.length - longs;
+  const fullL = planL.length ? planL[planL.length - 1] : null;
+  const fullS = planS.length ? planS[planS.length - 1] : null;
+  const dist = (p: number | null) =>
+    p == null ? "mimo 1,00–1,30" : `${p > px ? "+" : "−"}${pips(px, p)} pipov`;
 
+  // Horný riadok rast (shorty), dolný pád (longy) — rovnako ako scenár
+  // pod pásom, kde sú vyššie kurzy hore.
   return (
     <div className="flex flex-col gap-3">
       <div className="grid grid-cols-3 gap-2">
-        <Tile label="Margin call" tone="text-warn"
-              value={call == null ? "—" : p4(call)}
-              sub={call == null ? "mimo 1,00–1,30" : `−${pips(px, call)} pipov`} />
-        <Tile label="Stop-out" tone="text-neg"
-              value={stop == null ? "—" : p4(stop)}
-              sub={stop == null ? "mimo 1,00–1,30" : `−${pips(px, stop)} pipov`} />
-        <Tile label="Kapacita" value={`${longs}/${input.cap}`}
-              sub={full == null ? "plná" : `plná pri ${p4(full)}`} />
+        <Tile label="Margin call ↑" tone="text-warn"
+              value={lim.callUp == null ? "—" : p4(lim.callUp)} sub={dist(lim.callUp)} />
+        <Tile label="Stop-out ↑" tone="text-neg"
+              value={lim.stopUp == null ? "—" : p4(lim.stopUp)} sub={dist(lim.stopUp)} />
+        <Tile label="Shorty" value={`${shorts}/${input.cap}`}
+              sub={fullS == null ? "plné" : `plné pri ${p4(fullS)}`} />
+        <Tile label="Margin call ↓" tone="text-warn"
+              value={lim.callDn == null ? "—" : p4(lim.callDn)} sub={dist(lim.callDn)} />
+        <Tile label="Stop-out ↓" tone="text-neg"
+              value={lim.stopDn == null ? "—" : p4(lim.stopDn)} sub={dist(lim.stopDn)} />
+        <Tile label="Longy" value={`${longs}/${input.cap}`}
+              sub={fullL == null ? "plné" : `plné pri ${p4(fullL)}`} />
       </div>
 
-      <Pas input={input} positions={positions} call={call} stop={stop} plan={plan} />
-      <Scenar input={input} call={call} stop={stop} />
+      <Pas input={input} positions={positions} lim={lim} planL={planL} planS={planS} />
+      <Scenar input={input} lim={lim} />
     </div>
   );
 }
 
+type Lim = { callDn: number | null; stopDn: number | null;
+             callUp: number | null; stopUp: number | null };
+
 /** Vodorovný pás: kde ležia pozície a hranice marže. */
-function Pas({ input, positions, call, stop, plan }: {
-  input: MapInput; positions: Position[];
-  call: number | null; stop: number | null; plan: number[];
+function Pas({ input, positions, lim, planL, planS }: {
+  input: MapInput; positions: Position[]; lim: Lim; planL: number[]; planS: number[];
 }) {
   const [box, W] = useWidth();
   const [hover, setHover] = useState<Snap | null>(null);
   const px = input.price;
 
   const entries = input.legs.map((l) => l.entry);
-  const lo = Math.min(stop ?? px - 0.03, ...entries, ...plan, px) - 0.002;
-  const hi = Math.max(input.bandHigh, px, ...entries) + 0.002;
+  const lo = Math.min(lim.stopDn ?? px - 0.03, ...entries, ...planL, px) - 0.002;
+  const hi = Math.max(lim.stopUp ?? px + 0.03, ...entries, ...planS, px) + 0.002;
   const x = (p: number) => PAD + ((p - lo) / (hi - lo)) * (W - 2 * PAD);
   const priceAt = (xx: number) => lo + ((xx - PAD) / (W - 2 * PAD)) * (hi - lo);
 
@@ -107,11 +127,14 @@ function Pas({ input, positions, call, stop, plan }: {
   const bandR = x(Math.min(input.bandHigh, hi));
   const pill = Math.min(Math.max(x(px), PAD + 28), W - PAD - 28);
 
-  // Popisky hraníc: stop-out vľavo od čiary, ak je miesto, margin call
-  // vpravo — tak sa nezrazia, ani keď sú blízko seba.
-  const marks: { p: number; label: string; col: string; end: boolean }[] = [];
-  if (stop != null) marks.push({ p: stop, label: "stop-out", col: "var(--neg)", end: x(stop) > 56 });
-  if (call != null) marks.push({ p: call, label: "margin call", col: "var(--warn)", end: false });
+  // Hranice bez popiskov v páse: pri oboch smeroch sú štyri a popisky sa
+  // zrážali s kurzom a pozíciami. Farba čiary + legenda, čísla v dlaždiciach.
+  const marks = ([
+    [lim.stopDn, "var(--neg)"], [lim.callDn, "var(--warn)"],
+    [lim.callUp, "var(--warn)"], [lim.stopUp, "var(--neg)"],
+  ] as [number | null, string][])
+    .filter(([p]) => p != null)
+    .map(([p, col]) => ({ p: p!, col }));
 
   const onMove = (clientX: number, el: SVGSVGElement) => {
     const p = priceAt(clientX - el.getBoundingClientRect().left);
@@ -130,8 +153,6 @@ function Pas({ input, positions, call, stop, plan }: {
           <>
             <rect x={bandL} y={AX - TICK - 8} width={bandR - bandL} height={2 * TICK + 16}
                   rx={6} fill="var(--surface)" />
-            <text x={bandR - 4} y={AX + TICK + 4} textAnchor="end" fontSize={10}
-                  fill="var(--faint)">pásmo</text>
           </>
         )}
 
@@ -145,19 +166,18 @@ function Pas({ input, positions, call, stop, plan }: {
         ))}
 
         {marks.map((m) => (
-          <g key={m.label}>
-            <line x1={x(m.p)} y1={AX - TICK - 14} x2={x(m.p)} y2={AX + TICK + 8}
-                  stroke={m.col} strokeDasharray="3 3" />
-            <text x={x(m.p) + (m.end ? -3 : 3)} y={AX - TICK - 16}
-                  textAnchor={m.end ? "end" : "start"} fontSize={10} fill={m.col}>
-              {m.label}
-            </text>
-          </g>
+          <line key={m.p} x1={x(m.p)} y1={AX - TICK - 14} x2={x(m.p)} y2={AX + TICK + 8}
+                stroke={m.col} strokeWidth={1.5} strokeDasharray="3 3" />
         ))}
 
-        {plan.map((p) => (
-          <line key={`f${p}`} x1={x(p)} y1={AX - TICK - 4} x2={x(p)} y2={AX - 5}
+        {planL.map((p) => (
+          <line key={`fl${p}`} x1={x(p)} y1={AX - TICK - 4} x2={x(p)} y2={AX - 5}
                 stroke="var(--long)" strokeWidth={2} strokeOpacity={0.35}
+                strokeDasharray="3 2" />
+        ))}
+        {planS.map((p) => (
+          <line key={`fs${p}`} x1={x(p)} y1={AX + 5} x2={x(p)} y2={AX + TICK + 4}
+                stroke="var(--short)" strokeWidth={2} strokeOpacity={0.35}
                 strokeDasharray="3 2" />
         ))}
         {positions.map((p) => {
@@ -197,7 +217,8 @@ function Pas({ input, positions, call, stop, plan }: {
         ) : (
           <span className="text-faint">
             <Znak c="var(--long)" /> long · <Znak c="var(--short)" /> short ·{" "}
-            <Znak c="var(--long)" faded /> ďalšie longy
+            <Znak c="var(--long)" faded /><Znak c="var(--short)" faded /> ďalšie ·{" "}
+            <Ciara c="var(--warn)" /> margin call · <Ciara c="var(--neg)" /> stop-out
           </span>
         )}
       </p>
@@ -212,19 +233,28 @@ function Znak({ c, faded }: { c: string; faded?: boolean }) {
   );
 }
 
-/** Scenár pádu: riadok po 50 pipoch od kurzu nadol, hranice vsunuté. */
-function Scenar({ input, call, stop }: {
-  input: MapInput; call: number | null; stop: number | null;
-}) {
+function Ciara({ c }: { c: string }) {
+  return (
+    <span className="mx-0.5 inline-block h-2.5 align-[-1px]"
+          style={{ borderLeft: `1.5px dashed ${c}` }} />
+  );
+}
+
+/** Scenár: riadok po 50 pipoch od kurzu hore aj dole, hranice vsunuté. */
+function Scenar({ input, lim }: { input: MapInput; lim: Lim }) {
   const px = input.price;
-  const floor = (stop ?? px - 0.03) - 0.001;
+  const floor = (lim.stopDn ?? px - 0.03) - 0.001;
+  const ceil = (lim.stopUp ?? px + 0.03) + 0.001;
   type Row = { p: number; kind?: "now" | "call" | "stop" };
   const rows: Row[] = [{ p: px, kind: "now" }];
-  for (let p = Math.floor((px - 0.0001) / 0.005) * 0.005; p >= floor; p -= 0.005) {
-    rows.push({ p: Number(p.toFixed(4)) });
+  for (let n = Math.ceil(floor / 0.005); n * 0.005 <= ceil; n++) {
+    const p = Number((n * 0.005).toFixed(4));
+    if (Math.abs(p - px) > 0.00005) rows.push({ p });
   }
-  if (call != null && call < px) rows.push({ p: call, kind: "call" });
-  if (stop != null && stop < px) rows.push({ p: stop, kind: "stop" });
+  for (const [p, kind] of [[lim.callDn, "call"], [lim.stopDn, "stop"],
+                           [lim.callUp, "call"], [lim.stopUp, "stop"]] as const) {
+    if (p != null) rows.push({ p, kind });
+  }
   rows.sort((a, b) => b.p - a.p);
   // Riadok mriežky, ktorý padne presne na hranicu, sa nezdvojí.
   const uniq = rows.filter((r, n) => !(r.kind == null && rows.some(
@@ -255,7 +285,7 @@ function Scenar({ input, call, stop }: {
               {r.kind === "now" ? <b className="text-ink">teraz</b>
                 : r.kind === "call" ? <b className="text-warn">margin call</b>
                 : r.kind === "stop" ? <b className="text-neg">stop-out</b>
-                : <span className="tabular-nums">−{pips(px, r.p)} p</span>}
+                : <span className="tabular-nums">{r.p > px ? "+" : "−"}{pips(px, r.p)} p</span>}
             </span>
             <span className="w-[50px] text-[11.5px] tabular-nums text-muted">
               {s.longs}L {s.shorts}S
