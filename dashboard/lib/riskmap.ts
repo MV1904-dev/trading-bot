@@ -9,9 +9,13 @@
  * Zámerné zjednodušenia (model, nie predpoveď):
  *  - cesta je jednosmerná; ak kurz po ceste osciluje, longy vyberú TP,
  *    marža sa uvoľní a skutočnosť bude lepšia než tieto čísla
- *  - swap sa nepripočítava (závisí od toho, ako dlho cesta trvá)
+ *  - budúci swap sa nepripočítava (závisí od toho, ako dlho cesta trvá);
+ *    už naakumulovaný swap otvorených pozícií áno — je to vzniknutý náklad
  *  - marža na pozíciu sa berie zo živého stavu (použitá marža / počet
  *    pozícií), takže sedí s brokerom aj keď sa zmení páka
+ *  - použitá marža je len z väčšej strany: cTrader pri protismerných
+ *    pozíciách na jednom páre účtuje hedging (overené proti aplikácii
+ *    brokera 15. 10. 2026: 25 L / 3 S → 25 × 333,33 = 8 333,25)
  */
 
 export type Leg = { side: "long" | "short"; entry: number; tp: number | null; qty: number };
@@ -19,6 +23,8 @@ export type Leg = { side: "long" | "short"; entry: number; tp: number | null; qt
 export type MapInput = {
   price: number;
   balance: number;
+  /** Naakumulovaný swap otvorených pozícií (záporný = náklad). */
+  swap: number;
   marginPer: number;
   bandLow: number;
   bandHigh: number;
@@ -91,8 +97,8 @@ export function snapshotAt(i: MapInput, px: number): Snap {
 
   const longs = open.filter((l) => l.side === "long").length + pridane.length;
   const shorts = open.length - (longs - pridane.length);
-  const used = (longs + shorts) * i.marginPer;
-  const equity = balance + floating;
+  const used = Math.max(longs, shorts) * i.marginPer;
+  const equity = balance + floating + i.swap;
 
   return {
     price: px,
@@ -106,6 +112,12 @@ export function snapshotAt(i: MapInput, px: number): Snap {
     opensLong: i.longEnabled && px < i.bandHigh,
     opensShort: i.shortEnabled && px > i.bandLow,
   };
+}
+
+/** Ceny, na ktorých by grid cestou dole otvoril ďalšie longy (až po kapacitu). */
+export function futureLongs(i: MapInput, to: number): number[] {
+  const open = i.legs.filter((l) => l.side === "long").length;
+  return extraLongs(i, to, i.cap - open);
 }
 
 /** Rovnomerná vzorka celej osi; `step` je v cene, nie v pipoch. */
@@ -130,7 +142,8 @@ export function buildInput(
     band_low: number | null; band_high: number | null;
     config: Record<string, unknown> | null;
   },
-  positions: { side: "long" | "short"; entry_price: number; tp_price: number | null; qty: number }[],
+  positions: { side: "long" | "short"; entry_price: number; tp_price: number | null;
+               qty: number; funding_usd?: number | null }[],
 ): MapInput | null {
   const c = (state.config ?? {}) as Record<string, number | boolean | null>;
   const price = state.last_price;
@@ -142,6 +155,7 @@ export function buildInput(
   return {
     price,
     balance: state.balance,
+    swap: positions.reduce((a, p) => a + (Number(p.funding_usd) || 0), 0),
     marginPer,
     bandLow: state.band_low ?? 1.12,
     bandHigh: state.band_high ?? 1.16,

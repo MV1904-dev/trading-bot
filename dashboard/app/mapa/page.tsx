@@ -16,8 +16,8 @@ export default function MapaPage() {
   return (
     <main>
       <Section
-        title="Mapa celej osi"
-        info="Celý rozsah 1,00–1,30 naraz. Zelený pás je tam, kde bot otvára longy, modrý tam, kde shorty — a vidno na ňom, že pásmo nie je symetrická ochrana: dolná hrana vypína len shorty, takže pod ňou longy pribúdajú ďalej. Oranžová plocha je suma, ktorú by bolo treba doliať, aby margin level neklesol pod 100 %. Je to model jednosmerného pádu bez swapov: ak kurz po ceste osciluje, longy vyberú TP, marža sa uvoľní a skutočnosť bude lepšia. Ťahaj myšou po grafe (alebo ťukni na mobile) a čítaj hodnoty pre ľubovoľný kurz."
+        title="Mapa rizika"
+        info="Zvislá cenová os od najvyššej pozície po stop-out. Plné pruhy sú otvorené pozície (zelené long, modré short), obrysy sú longy, ktoré by grid otvoril cestou dole, kým sa nenaplní kapacita. Sivý podklad je pásmo — jeho dolná hrana vypína len shorty. Oranžová plocha je suma, ktorú by bolo treba doliať, aby marža neklesla pod 100 %. Model jednosmerného pádu bez budúcich swapov: ak kurz osciluje, longy vyberú TP a skutočnosť bude lepšia. Ťahaj po grafe a čítaj hodnoty pre ľubovoľný kurz."
       >
         <RiskMap state={states[0] ?? null} positions={positions} />
       </Section>
