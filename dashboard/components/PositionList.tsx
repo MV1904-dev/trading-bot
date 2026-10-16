@@ -4,7 +4,7 @@ import { useState } from "react";
 import { createClient } from "@/lib/supabase";
 import { age, holdClass, holdMs, money, pnlClass, price, signed } from "@/lib/format";
 import { Detail, Empty, ExpandableRow } from "@/components/ui";
-import { useEnv } from "@/lib/env";
+import { isVirtual, useEnv } from "@/lib/env";
 import type { Position } from "@/lib/types";
 
 /**
@@ -73,7 +73,7 @@ export default function PositionList({
             tone={pnlClass(p.funding_usd)}
           />
           <Detail label="Stratégia" value={p.strategy} />
-          {env !== "paper" && (
+          {!isVirtual(env) && (
             <div className="mt-2 text-right">
               <button onClick={() => setConfirming(p)} className="btn-quiet !text-neg">
                 Zatvoriť

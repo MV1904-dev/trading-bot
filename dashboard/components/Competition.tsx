@@ -6,46 +6,74 @@ import { money, pnlClass, signed } from "@/lib/format";
 import type { BotState, Position } from "@/lib/types";
 
 /**
- * Súťaž: živý grid proti stratégii Strážca na virtuálnom účte.
+ * Súťaž: živý grid proti všetkým virtuálnym účtom (paper_bot.py).
  *
- * Porovnáva sa ZMENA od štartu virtuálneho účtu, nie absolútne čísla:
- * live si nesie pozície otvorené pred súťažou (23 L / 6 S k 16. 10.),
- * virtuálny účet začal prázdny s rovnakým kapitálom (15 200 €). Equity
- * na oboch stranách = zostatok + float, bez naakumulovaného swapu
- * otvorených pozícií — ten by live penalizoval za staré pozície; swap sa
- * do výsledku dostane, keď sa pozícia zavrie.
+ * Všetky účty sa porovnávajú v tom istom okne — od zvoleného štartu
+ * (predvolene štart najmladšieho účtu, aby mali všetci rovnaké podmienky).
+ * Výsledok = equity teraz − equity na začiatku okna (prvý 5-min snapshot
+ * v okne). Equity = zostatok + float, bez naakumulovaného swapu otvorených
+ * pozícií — ten by live penalizoval za pozície spred súťaže; swap sa do
+ * výsledku dostane, keď sa pozícia zavrie. Live si nesie staré pozície,
+ * virtuálne účty začali prázdne s 15 200 €.
  */
 
-export type Env = "live" | "paper";
-export type Snap = { env: Env; ts: string; equity: number };
-export type TradeRow = { env: Env; pnl_usd: number | null; closed_at: string };
-export type PosRow = Position & { env: Env };
+export type Snap = { env: string; ts: string; equity: number };
+export type TradeRow = { env: string; pnl_usd: number | null; closed_at: string };
+export type PosRow = Position & { env: string };
+export type StateRow = BotState & { env: string };
 
-const COLOR: Record<Env, string> = { live: "var(--ink)", paper: "#7c3aed" };
-const NAME: Record<Env, string> = { live: "Live grid", paper: "Strážca (sim)" };
+// live neutrálne, virtuálne účty v poradí štartu
+const PALETTE = ["#7c3aed", "#0891b2", "#d97706", "#db2777", "#65a30d", "#4f46e5"];
 
-export default function Competition({ live, paper, trades, positions, snaps }: {
-  live: BotState | null; paper: BotState | null; trades: TradeRow[];
-  positions: PosRow[]; snaps: Snap[];
+export type Account = { env: string; name: string; color: string; start: string | null };
+
+export function accountsOf(states: StateRow[]): Account[] {
+  const virt = states.filter((s) => s.env.startsWith("paper"))
+    .map((s) => ({
+      env: s.env,
+      name: (s.config?.strategy_name as string) || s.env,
+      start: (s.config?.started_at as string) ?? null,
+    }))
+    .sort((a, b) => (a.start ?? "").localeCompare(b.start ?? ""));
+  const live = states.some((s) => s.env === "live")
+    ? [{ env: "live", name: "Live grid", color: "var(--ink)", start: null }] : [];
+  return [...live, ...virt.map((v, i) => ({ ...v, color: PALETTE[i % PALETTE.length] }))];
+}
+
+export default function Competition({ accounts, states, trades, positions, snaps, start, onStart }: {
+  accounts: Account[]; states: StateRow[]; trades: TradeRow[]; positions: PosRow[];
+  snaps: Snap[]; start: string | null; onStart: (s: string) => void;
 }) {
-  const start = (paper?.config?.started_at as string | undefined) ?? null;
-  if (!paper || !start) {
+  const virt = accounts.filter((a) => a.start);
+  if (!virt.length || !start) {
     return (
       <main>
         <Section title="Súťaž">
-          <Empty>Virtuálny účet ešte nebeží — porovnanie sa objaví po jeho štarte.</Empty>
+          <Empty>Virtuálne účty ešte nebežia — porovnanie sa objaví po ich štarte.</Empty>
         </Section>
       </main>
     );
   }
 
-  const side = (env: Env, st: BotState | null) => {
-    const pos = positions.filter((p) => p.env === env);
-    const tr = trades.filter((t) => t.env === env);
-    const sn = snaps.filter((s) => s.env === env);
+  // okná porovnania = rôzne časy štartu (účty spustené naraz zdieľajú jedno)
+  const starts = Object.entries(virt.reduce<Record<string, string[]>>((m, v) => {
+    (m[v.start!] ??= []).push(v.name);
+    return m;
+  }, {})).sort(([a], [b]) => a.localeCompare(b));
+
+  const fmt = (iso: string) => new Date(iso).toLocaleString("sk-SK",
+    { day: "numeric", month: "numeric", hour: "2-digit", minute: "2-digit", timeZone: "Europe/Bratislava" });
+
+  const rows = accounts.map((acc) => {
+    const st = states.find((s) => s.env === acc.env) ?? null;
+    const pos = positions.filter((p) => p.env === acc.env);
+    const tr = trades.filter((t) => t.env === acc.env);
+    const sn = snaps.filter((s) => s.env === acc.env);
     const eqNow = st?.equity != null ? Number(st.equity) : null;
-    const eqStart = env === "paper" ? Number(st?.deposits_net ?? 0) || null
-      : sn.length ? sn[0].equity : null;
+    // Účet, ktorý v okne ešte nemá snapshot, ale štartoval presne na jeho
+    // začiatku, začína na vklade.
+    const eqStart = sn.length ? sn[0].equity
+      : acc.start && acc.start >= start ? Number(st?.deposits_net ?? 0) || null : null;
     const result = eqNow != null && eqStart != null ? eqNow - eqStart : null;
     let peak = -Infinity, dd = 0;
     for (const v of [...sn.map((s) => s.equity), ...(eqNow != null ? [eqNow] : [])]) {
@@ -59,6 +87,7 @@ export default function Competition({ live, paper, trades, positions, snaps }: {
     const used = qL + qS > 0 ? (usedSum * Math.max(qL, qS)) / (qL + qS) : 0;
     const eqTrue = st?.balance != null ? Number(st.balance) + Number(st.floating_pnl ?? 0) + swap : null;
     return {
+      acc,
       result,
       pct: result != null && eqStart ? (result / eqStart) * 100 : null,
       realized: tr.reduce((a, t) => a + (Number(t.pnl_usd) || 0), 0),
@@ -66,71 +95,71 @@ export default function Competition({ live, paper, trades, positions, snaps }: {
       dd: sn.length ? dd : null,
       longs: pos.filter((p) => p.side === "long").length,
       shorts: pos.filter((p) => p.side === "short").length,
-      floating: Number(st?.floating_pnl ?? 0),
       ml: eqTrue != null && used > 0 ? (eqTrue / used) * 100 : null,
     };
-  };
-  const L = side("live", live);
-  const P = side("paper", paper);
-
-  const since = new Date(start).toLocaleString("sk-SK",
-    { day: "numeric", month: "numeric", hour: "2-digit", minute: "2-digit", timeZone: "Europe/Bratislava" });
-
-  type Row = [string, string, string, number | null, number | null, "hi" | "lo" | null, string?];
-  const rows: Row[] = [
-    ["Výsledok", signed(L.result, 0), signed(P.result, 0), L.result, P.result, "hi"],
-    ["Výnos", L.pct == null ? "—" : `${signed(L.pct)} %`, P.pct == null ? "—" : `${signed(P.pct)} %`, L.pct, P.pct, "hi"],
-    ["Realizované", signed(L.realized, 0), signed(P.realized, 0), L.realized, P.realized, "hi"],
-    ["Cyklov", String(L.cycles), String(P.cycles), L.cycles, P.cycles, null],
-    ["Max prepad", L.dd == null ? "—" : money(L.dd, 0), P.dd == null ? "—" : money(P.dd, 0), L.dd, P.dd, "lo"],
-    ["Float teraz", signed(L.floating, 0), signed(P.floating, 0), L.floating, P.floating, null],
-    ["Otvorené L/S", `${L.longs}/${L.shorts}`, `${P.longs}/${P.shorts}`, null, null, null],
-    ["Marža teraz", L.ml == null ? "—" : `${L.ml.toFixed(0)} %`, P.ml == null ? "—" : `${P.ml.toFixed(0)} %`, L.ml, P.ml, "hi"],
-  ];
+  }).sort((a, b) => (b.result ?? -Infinity) - (a.result ?? -Infinity));
 
   return (
     <main>
       <Section
         title="Súťaž"
-        meta={`od ${since}`}
+        meta={`od ${fmt(start)}`}
         info={
           <>
-            Živý grid proti stratégii Strážca na virtuálnom účte. Strážca je ten
-            istý grid, ale proti trendu (H1 EMA 100/400) drží najviac 4 pozície
-            s dvojnásobným krokom, v smere trendu 20. Virtuálny účet verne
-            simuluje cTrader na živých cenách: spread, TP medzi kotáciami,
-            provízia 0,526 €, swap podľa sadzieb live účtu, marža len z väčšej
-            strany a stop-out pri 50 %. Porovnáva sa zmena od štartu — live si
-            nesie pozície spred súťaže, virtuálny účet začal prázdny s 15 200 €.
-            Equity je zostatok + float, bez swapu otvorených pozícií (ten by live
-            penalizoval za staré pozície); swap sa započíta, keď sa pozícia zavrie.
-            Zelené je lepšie z dvojice.
+            Živý grid proti stratégiám na virtuálnych účtoch. Virtuálny účet verne
+            simuluje cTrader na živých cenách: spread, TP medzi kotáciami, provízia
+            0,526 €, swap podľa sadzieb live účtu, marža len z väčšej strany,
+            stop-out pri 50 %. Všetci sa porovnávajú v tom istom okne — od štartu
+            zvoleného účtu (predvolene najmladšieho). Výsledok je zmena equity
+            v okne; equity je zostatok + float bez swapu otvorených pozícií (ten by
+            live penalizoval za pozície spred súťaže). Live si nesie staré pozície,
+            virtuálne účty začali prázdne s 15 200 €. Poradie podľa výsledku.
           </>
         }
       >
-        <div className="overflow-hidden rounded-lg bg-surface">
-          <div className="grid grid-cols-[1fr_auto_auto] gap-x-4 px-3 py-2 text-xs text-faint">
-            <span />
-            <span className="w-24 text-right">{NAME.live}</span>
-            <span className="w-24 text-right" style={{ color: COLOR.paper }}>{NAME.paper}</span>
+        {starts.length > 1 && (
+          <div className="mb-3 flex flex-wrap items-center gap-1.5 text-xs">
+            <span className="text-faint">Porovnať od:</span>
+            {starts.map(([t, names]) => (
+              <button key={t} onClick={() => onStart(t)} aria-pressed={start === t}
+                      title={names.join(", ")}
+                      className={`rounded-full px-2.5 py-1 transition-colors ${
+                        start === t ? "bg-ink text-bg" : "bg-surface text-muted hover:text-ink"}`}>
+                {fmt(t)} · {names.length === 1 ? names[0] : `${names.length} účty`}
+              </button>
+            ))}
           </div>
-          {rows.map(([label, l, p, lv, pv, better]) => {
-            const win = better && lv != null && pv != null && lv !== pv
-              ? (better === "hi" ? (lv > pv ? "l" : "p") : (lv < pv ? "l" : "p")) : null;
-            return (
-              <div key={label}
-                   className="grid grid-cols-[1fr_auto_auto] items-baseline gap-x-4 border-t border-hair px-3 py-2">
-                <span className="text-sm text-muted">{label}</span>
-                <span className={`num w-24 text-right ${win === "l" ? "text-pos font-semibold" : label === "Výsledok" ? pnlClass(lv) : ""}`}>{l}</span>
-                <span className={`num w-24 text-right ${win === "p" ? "text-pos font-semibold" : label === "Výsledok" ? pnlClass(pv) : ""}`}>{p}</span>
+        )}
+
+        <ol className="overflow-hidden rounded-lg bg-surface">
+          {rows.map((r, i) => (
+            <li key={r.acc.env} className={`px-3 py-2.5 ${i ? "border-t border-hair" : ""}`}>
+              <div className="flex items-baseline gap-2">
+                <span className="w-4 text-xs text-faint tabular-nums">{i + 1}.</span>
+                <span className="inline-block h-2.5 w-2.5 shrink-0 rounded-full"
+                      style={{ background: r.acc.color }} />
+                <span className="truncate text-sm font-medium">{r.acc.name}</span>
+                <span className={`num ml-auto text-[15px] font-semibold ${pnlClass(r.result)}`}>
+                  {r.result == null ? "—" : `${signed(r.result, 0)} €`}
+                </span>
+                <span className={`num w-16 text-right text-xs ${pnlClass(r.pct)}`}>
+                  {r.pct == null ? "" : `${signed(r.pct)} %`}
+                </span>
               </div>
-            );
-          })}
-        </div>
+              <div className="mt-0.5 pl-[42px] text-[11px] leading-relaxed text-faint">
+                realiz. <span className={`num ${pnlClass(r.realized)}`}>{signed(r.realized, 0)}</span>
+                {" · "}{r.cycles} cyklov
+                {" · "}prepad <span className="num">{r.dd == null ? "—" : money(r.dd, 0)}</span>
+                {" · "}marža <span className="num">{r.ml == null ? "—" : `${r.ml.toFixed(0)} %`}</span>
+                {" · "}<span className="num">{r.longs}L/{r.shorts}S</span>
+              </div>
+            </li>
+          ))}
+        </ol>
       </Section>
 
-      <Section title="Zmena equity od štartu">
-        <EquityChart snaps={snaps} live={live} paper={paper} />
+      <Section title="Zmena equity v okne">
+        <EquityChart accounts={accounts} snaps={snaps} states={states} start={start} />
       </Section>
     </main>
   );
@@ -149,27 +178,28 @@ function useWidth() {
   return [ref, w] as const;
 }
 
-function EquityChart({ snaps, live, paper }: {
-  snaps: Snap[]; live: BotState | null; paper: BotState | null;
+function EquityChart({ accounts, snaps, states, start }: {
+  accounts: Account[]; snaps: Snap[]; states: StateRow[]; start: string;
 }) {
   const [box, W] = useWidth();
-  const H = 200, PL = 44, PR = 8, PT = 10, PB = 22;
+  const H = 210, PL = 44, PR = 8, PT = 10, PB = 22;
 
   const series = useMemo(() => {
-    const out: Record<Env, { t: number; v: number }[]> = { live: [], paper: [] };
-    for (const env of ["live", "paper"] as Env[]) {
-      const sn = snaps.filter((s) => s.env === env);
+    const out: Record<string, { t: number; v: number }[]> = {};
+    for (const acc of accounts) {
+      const sn = snaps.filter((s) => s.env === acc.env);
       if (!sn.length) continue;
-      const base = env === "paper" ? Number(paper?.deposits_net ?? sn[0].equity) : sn[0].equity;
-      // ~300 bodov stačí na šírku mobilu; staršie riedime rovnomerne
-      const k = Math.max(1, Math.ceil(sn.length / 300));
-      out[env] = sn.filter((_, i) => i % k === 0 || i === sn.length - 1)
+      const st = states.find((s) => s.env === acc.env);
+      const base = acc.start && acc.start >= start && st?.deposits_net
+        ? Number(st.deposits_net) : sn[0].equity;
+      const k = Math.max(1, Math.ceil(sn.length / 300));   // ~300 bodov stačí
+      out[acc.env] = sn.filter((_, i) => i % k === 0 || i === sn.length - 1)
         .map((s) => ({ t: Date.parse(s.ts), v: s.equity - base }));
     }
     return out;
-  }, [snaps, paper]);
+  }, [accounts, snaps, states, start]);
 
-  const all = [...series.live, ...series.paper];
+  const all = Object.values(series).flat();
   if (all.length < 2) {
     return <Empty>Graf sa zaplní po prvých snapshotoch (každých 5 minút).</Empty>;
   }
@@ -182,7 +212,6 @@ function EquityChart({ snaps, live, paper }: {
   const path = (pts: { t: number; v: number }[]) =>
     pts.map((p, i) => `${i ? "L" : "M"}${x(p.t).toFixed(1)} ${y(p.v).toFixed(1)}`).join(" ");
 
-  // 3–4 popisky osi y na okrúhlych hodnotách
   const span = hi - lo;
   const step = [50, 100, 250, 500, 1000, 2500, 5000].find((s) => span / s <= 4) ?? 10_000;
   const ticks: number[] = [];
@@ -196,7 +225,7 @@ function EquityChart({ snaps, live, paper }: {
   return (
     <div ref={box} className="w-full">
       <svg width={W} height={H} className="block" role="img"
-           aria-label="Zmena equity od štartu súťaže: live grid a Strážca">
+           aria-label="Zmena equity všetkých účtov v okne súťaže">
         {ticks.map((v) => (
           <g key={v}>
             <line x1={PL} x2={W - PR} y1={y(v)} y2={y(v)}
@@ -210,24 +239,23 @@ function EquityChart({ snaps, live, paper }: {
             {new Date(d).toLocaleDateString("sk-SK", { day: "numeric", month: "numeric" })}
           </text>
         ))}
-        {(["live", "paper"] as Env[]).map((env) => series[env].length > 1 && (
-          <path key={env} d={path(series[env])} fill="none" stroke={COLOR[env]}
+        {accounts.map((acc) => (series[acc.env]?.length ?? 0) > 1 && (
+          <path key={acc.env} d={path(series[acc.env])} fill="none" stroke={acc.color}
                 strokeWidth={1.75} strokeLinejoin="round" />
         ))}
       </svg>
-      <ul className="mt-1 flex gap-4 text-[11px] text-muted">
-        {(["live", "paper"] as Env[]).map((env) => {
-          const last = series[env].at(-1);
+      <ul className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-muted">
+        {accounts.map((acc) => {
+          const last = series[acc.env]?.at(-1);
           return (
-            <li key={env} className="flex items-center gap-1.5">
-              <span className="inline-block h-[3px] w-4 rounded-full" style={{ background: COLOR[env] }} />
-              {NAME[env]}
+            <li key={acc.env} className="flex items-center gap-1.5">
+              <span className="inline-block h-[3px] w-4 rounded-full" style={{ background: acc.color }} />
+              {acc.name}
               {last && <b className={`num ${pnlClass(last.v)}`}>{signed(last.v, 0)}</b>}
             </li>
           );
         })}
       </ul>
-      {live == null && <p className="mt-1 text-xs text-faint">Live stav nedostupný.</p>}
     </div>
   );
 }

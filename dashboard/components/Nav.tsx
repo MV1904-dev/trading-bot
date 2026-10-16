@@ -4,37 +4,54 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useState } from "react";
 import ThemeToggle from "@/components/ThemeToggle";
-import { useEnv, type BotEnv } from "@/lib/env";
+import { isVirtual, useEnv } from "@/lib/env";
 
-/** Prepínač účtu. Live je predvolené — bot obchoduje naživo; SIM je
-    virtuálny účet súťažnej stratégie Strážca, demo archív checkpointu. */
-const ENV_LABEL: Record<BotEnv, string> = { live: "live", paper: "sim", demo: "demo" };
-const ENV_TITLE: Record<BotEnv, string> = {
-  live: "Živý účet — grid",
-  paper: "Virtuálny účet — stratégia Strážca",
-  demo: "Demo archív",
-};
+/** Prepínač účtu. Live je predvolené — bot obchoduje naživo; SIM sú
+    virtuálne účty súťažných stratégií (výber pod hlavičkou), demo archív. */
 function EnvToggle() {
-  const { env, setEnv } = useEnv();
+  const { env, setEnv, virtuals } = useEnv();
+  const sim = isVirtual(env);
+  function openSim() {
+    let last: string | null = null;
+    try { last = localStorage.getItem("bot-env-sim"); } catch {}
+    const pick = virtuals.find((v) => v.env === last) ?? virtuals[0];
+    setEnv(pick ? pick.env : "paper");
+  }
+  const btn = (active: boolean, on: string) =>
+    `px-2 py-1 uppercase transition-colors ${active ? on : "text-faint"}`;
   return (
     <div className="mr-1 flex overflow-hidden rounded-md border border-hair text-[11px] font-semibold">
-      {(["live", "paper", "demo"] as BotEnv[]).map((e) => (
-        <button
-          key={e}
-          onClick={() => setEnv(e)}
-          aria-pressed={env === e}
-          title={ENV_TITLE[e]}
-          className={`px-2 py-1 uppercase transition-colors ${
-            env === e
-              ? e === "live"
-                ? "bg-red-600 text-white"
-                : e === "paper"
-                  ? "bg-violet-600 text-white"
-                  : "bg-surface text-ink"
-              : "text-faint"
-          }`}
-        >
-          {ENV_LABEL[e]}
+      <button onClick={() => setEnv("live")} aria-pressed={env === "live"}
+              title="Živý účet — grid" className={btn(env === "live", "bg-red-600 text-white")}>
+        live
+      </button>
+      <button onClick={openSim} aria-pressed={sim} title="Virtuálne účty — súťažné stratégie"
+              className={btn(sim, "bg-violet-600 text-white")}>
+        sim
+      </button>
+      <button onClick={() => setEnv("demo")} aria-pressed={env === "demo"}
+              title="Demo archív" className={btn(env === "demo", "bg-surface text-ink")}>
+        demo
+      </button>
+    </div>
+  );
+}
+
+/** Výber virtuálneho účtu — len v režime SIM, pod hlavičkou. Zoznam je
+    z bot_state, nová stratégia sa tu objaví sama. */
+function SimPicker() {
+  const { env, setEnv, virtuals } = useEnv();
+  if (!isVirtual(env) || virtuals.length < 2) return null;
+  return (
+    <div className="mx-auto flex max-w-5xl gap-1.5 overflow-x-auto px-4 pb-2">
+      {virtuals.map((v) => (
+        <button key={v.env} onClick={() => setEnv(v.env)} aria-pressed={env === v.env}
+                className={`shrink-0 rounded-full px-2.5 py-1 text-xs transition-colors ${
+                  env === v.env
+                    ? "bg-violet-600 text-white"
+                    : "bg-surface text-muted hover:text-ink"
+                }`}>
+          {v.name}
         </button>
       ))}
     </div>
@@ -96,6 +113,7 @@ export default function Nav() {
           <EnvToggle />
           <ThemeToggle />
         </div>
+        <SimPicker />
       </header>
 
       <nav className="safe-bottom fixed inset-x-0 bottom-0 z-20 border-t border-hair bg-bg/95 backdrop-blur sm:hidden">
