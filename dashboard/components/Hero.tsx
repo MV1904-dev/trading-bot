@@ -5,6 +5,7 @@ import { createClient } from "@/lib/supabase";
 import { dateTime, money, pnlClass, signed } from "@/lib/format";
 import { DataStamp, RefreshButton, Tile } from "@/components/ui";
 import { BLACKOUT_MIN, BOT_TZ, botToday, fxMarketClosed } from "@/lib/market";
+import { useEnv } from "@/lib/env";
 import type { BotState, CalendarEvent, DailyCycle, Position } from "@/lib/types";
 
 const STALE_MS = 3 * 60 * 1000;
@@ -29,6 +30,10 @@ export default function Hero({
 }) {
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
+  const { env } = useEnv();
+  // Virtuálny účet príkazy nečíta — tabuľka commands nemá env, takže
+  // pauza odtiaľto by zastavila ŽIVÉHO bota.
+  const virtual = env === "paper";
 
   if (!state) {
     return <p className="py-8 text-center text-sm text-muted">Čakám na prvý stav bota.</p>;
@@ -131,13 +136,19 @@ export default function Hero({
         <span className="ml-auto flex items-center gap-1">
           {onRefresh && <RefreshButton onClick={onRefresh} />}
         </span>
-        <button
-          onClick={() => send(state.paused ? "start" : "pause")}
-          disabled={busy}
-          className="btn-quiet"
-        >
-          {state.paused ? "Spustiť" : "Pauza 60 min"}
-        </button>
+        {virtual ? (
+          <span className="chip bg-violet-600/15 text-violet-600 dark:text-violet-400">
+            virtuálny účet · Strážca
+          </span>
+        ) : (
+          <button
+            onClick={() => send(state.paused ? "start" : "pause")}
+            disabled={busy}
+            className="btn-quiet"
+          >
+            {state.paused ? "Spustiť" : "Pauza 60 min"}
+          </button>
+        )}
       </div>
 
       {/* 1. účet: koľko som vložil → koľko je výsledok → v percentách

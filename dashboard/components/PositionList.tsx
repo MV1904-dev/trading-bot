@@ -4,6 +4,7 @@ import { useState } from "react";
 import { createClient } from "@/lib/supabase";
 import { age, holdClass, holdMs, money, pnlClass, price, signed } from "@/lib/format";
 import { Detail, Empty, ExpandableRow } from "@/components/ui";
+import { useEnv } from "@/lib/env";
 import type { Position } from "@/lib/types";
 
 /**
@@ -21,6 +22,9 @@ export default function PositionList({
   const [confirming, setConfirming] = useState<Position | null>(null);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
+  // Príkaz „close" nemá env — z virtuálneho účtu by zatvoril živú pozíciu
+  // s rovnakým id. Virtuálny bot príkazy nečíta, tlačidlo tam nepatrí.
+  const { env } = useEnv();
 
   const shown = limit ? positions.slice(0, limit) : positions;
   if (positions.length === 0) return <Empty>Žiadne otvorené pozície.</Empty>;
@@ -69,11 +73,13 @@ export default function PositionList({
             tone={pnlClass(p.funding_usd)}
           />
           <Detail label="Stratégia" value={p.strategy} />
-          <div className="mt-2 text-right">
-            <button onClick={() => setConfirming(p)} className="btn-quiet !text-neg">
-              Zatvoriť
-            </button>
-          </div>
+          {env !== "paper" && (
+            <div className="mt-2 text-right">
+              <button onClick={() => setConfirming(p)} className="btn-quiet !text-neg">
+                Zatvoriť
+              </button>
+            </div>
+          )}
         </ExpandableRow>
       ))}
 

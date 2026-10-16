@@ -2,9 +2,10 @@
 
 import { createContext, useContext, useEffect, useState } from "react";
 
-/** Demo/live rozmer zrkadlových dát. Bot beží naživo od 6. 8. 2026,
- *  demo história ostáva prístupná cez prepínač v hlavičke. */
-export type BotEnv = "live" | "demo";
+/** Rozmer zrkadlových dát. Bot beží naživo od 6. 8. 2026, demo história
+ *  ostáva prístupná cez prepínač v hlavičke a „paper" je virtuálny účet
+ *  súťažnej stratégie Strážca (paper_bot.py, od 18. 10. 2026). */
+export type BotEnv = "live" | "paper" | "demo";
 
 const EnvContext = createContext<{
   env: BotEnv;
@@ -16,7 +17,7 @@ export function EnvProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     const saved = localStorage.getItem("bot-env");
-    if (saved === "demo" || saved === "live") setEnvState(saved);
+    if (saved === "demo" || saved === "live" || saved === "paper") setEnvState(saved);
   }, []);
 
   function setEnv(e: BotEnv) {

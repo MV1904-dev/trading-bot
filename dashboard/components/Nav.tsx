@@ -6,26 +6,35 @@ import { useState } from "react";
 import ThemeToggle from "@/components/ThemeToggle";
 import { useEnv, type BotEnv } from "@/lib/env";
 
-/** Prepínač demo/live dát. Live je predvolené — bot obchoduje naživo,
-    demo ostáva ako archív checkpointu. */
+/** Prepínač účtu. Live je predvolené — bot obchoduje naživo; SIM je
+    virtuálny účet súťažnej stratégie Strážca, demo archív checkpointu. */
+const ENV_LABEL: Record<BotEnv, string> = { live: "live", paper: "sim", demo: "demo" };
+const ENV_TITLE: Record<BotEnv, string> = {
+  live: "Živý účet — grid",
+  paper: "Virtuálny účet — stratégia Strážca",
+  demo: "Demo archív",
+};
 function EnvToggle() {
   const { env, setEnv } = useEnv();
   return (
     <div className="mr-1 flex overflow-hidden rounded-md border border-hair text-[11px] font-semibold">
-      {(["live", "demo"] as BotEnv[]).map((e) => (
+      {(["live", "paper", "demo"] as BotEnv[]).map((e) => (
         <button
           key={e}
           onClick={() => setEnv(e)}
           aria-pressed={env === e}
+          title={ENV_TITLE[e]}
           className={`px-2 py-1 uppercase transition-colors ${
             env === e
               ? e === "live"
                 ? "bg-red-600 text-white"
-                : "bg-surface text-ink"
+                : e === "paper"
+                  ? "bg-violet-600 text-white"
+                  : "bg-surface text-ink"
               : "text-faint"
           }`}
         >
-          {e}
+          {ENV_LABEL[e]}
         </button>
       ))}
     </div>
@@ -41,6 +50,7 @@ const MAIN = [
   { href: "/calendar", label: "Kalendár", icon: CalendarIcon },
 ];
 const MORE = [
+  { href: "/vs", label: "Súťaž" },
   { href: "/history", label: "História" },
   { href: "/strategies", label: "Stratégie" },
 ];
