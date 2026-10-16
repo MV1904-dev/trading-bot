@@ -9,26 +9,24 @@ import {
 import type { BotState, Position } from "@/lib/types";
 
 /**
- * Rebrík pozícií a rizika na zvislej cenovej osi.
+ * Mapa rizika (zadanie 16. 10. 2026, varianta A + C):
+ *  - vodorovný pás pozícií — rovnaký jazyk ako graf na Prehľade: cena
+ *    zľava doprava, longy nad osou, shorty pod ňou, vybledlé čiarky sú
+ *    longy, ktoré grid ešte otvorí; zvislé čiary margin call a stop-out,
+ *  - pod ním scenár pádu — riadok po 50 pipoch od kurzu nadol s počtom
+ *    pozícií, úrovňou marže a sumou na doliatie. Čísla sa čítajú priamo,
+ *    nie odhadom z plochy grafu.
  *
- * Os ukazuje len to, čo je dôležité — od najvyššej otvorenej pozície (alebo
- * hornej hrany pásma) po stop-out — nie celé 1,00–1,30. Na celej osi mala
- * pozícia pol pixelu a všetko podstatné sa zlepilo do jedného pruhu.
- *
- * Graf sa kreslí v skutočných pixeloch (šírka z ResizeObserver), nie cez
- * viewBox: písmo a čiary tak majú na mobile aj na desktope rovnakú veľkosť
- * a výška je pevná.
- *
- * Stĺpce zľava: popis osi · longy · shorty · plocha „doliať".
+ * Os pásu ide od stop-outu po najvyššiu pozíciu, nie 1,00–1,30: na celej
+ * osi mala pozícia pol pixelu. Kreslí sa v skutočných pixeloch (šírka
+ * z ResizeObserver), takže písmo má na mobile aj desktope rovnakú veľkosť.
  */
 
-const H = 460, PAD_T = 14, PAD_B = 14;
-const X_AXIS = 40, X_LONG = 48, X_SHORT = 80, BAR = 26, X_FUND = 116;
+const H = 132, AX = 74, TICK = 24, PAD = 8;
 
-/** Šírka kontajnera v px; graf sa podľa nej prekreslí. */
 function useWidth() {
   const ref = useRef<HTMLDivElement>(null);
-  const [w, setW] = useState(360);
+  const [w, setW] = useState(358);
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
@@ -46,74 +44,26 @@ const p4 = (v: number) => v.toFixed(4);
 export default function RiskMap({
   state, positions,
 }: { state: BotState | null; positions: Position[] }) {
-  const [box, W] = useWidth();
-  const [hover, setHover] = useState<Snap | null>(null);
-
   const model = useMemo(() => {
     if (!state) return null;
     const input = buildInput(state, positions);
     if (!input) return null;
-    // Hranice hľadáme na širokej osi, zobrazujeme len výsek okolo nich.
     const wide = scan(input, 1.0, 1.3, 0.0005);
-    const call = thresholdPrice(wide, 100);
-    const stop = thresholdPrice(wide, 50);
-    const plan = futureLongs(input, 1.0);
-    const entries = input.legs.map((l) => l.entry);
-    const lo = Math.min(stop ?? input.price - 0.03, ...entries, ...plan, input.price) - 0.003;
-    const hi = Math.max(input.bandHigh, input.price, ...entries) + 0.003;
-    const snaps = scan(input, lo, hi, 0.0002);
     return {
-      input, snaps, call, stop, plan, lo, hi,
-      maxFund: Math.max(...snaps.map((s) => s.fund100), 1),
+      input,
+      call: thresholdPrice(wide, 100),
+      stop: thresholdPrice(wide, 50),
+      plan: futureLongs(input, 1.0),
     };
   }, [state, positions]);
 
   if (!model) {
     return <Empty>Čakám na kurz, zostatok a otvorené pozície z bota.</Empty>;
   }
-  const { input, snaps, call, stop, plan, lo, hi, maxFund } = model;
+  const { input, call, stop, plan } = model;
   const px = input.price;
-  const X_END = W - 6;
-
-  const y = (p: number) => PAD_T + ((hi - p) / (hi - lo)) * (H - PAD_T - PAD_B);
-  const priceAt = (yy: number) => hi - ((yy - PAD_T) / (H - PAD_T - PAD_B)) * (hi - lo);
-  const fx = (v: number) => X_FUND + (v / maxFund) * (X_END - X_FUND);
-
-  // Plocha „doliať" len tam, kde je čo doliať (pod margin callom).
-  const need = snaps.filter((s) => s.fund100 > 0);
-  const fundLine = need
-    .map((s, n) => `${n ? "L" : "M"} ${fx(s.fund100).toFixed(1)} ${y(s.price).toFixed(1)}`)
-    .join(" ");
-  const fundArea = need.length
-    ? `M ${X_FUND} ${y(need[0].price)} ${fundLine.replace(/^M/, "L")} ` +
-      `L ${X_FUND} ${y(need[need.length - 1].price)} Z`
-    : "";
-  const fundAtStop = stop == null ? 0 : snapshotAt(input, stop).fund100;
-
-  const ticks: number[] = [];
-  for (let t = Math.ceil(lo * 100) / 100; t <= hi; t = Math.round((t + 0.01) * 100) / 100) {
-    ticks.push(t);
-  }
-
   const longs = input.legs.filter((l) => l.side === "long").length;
   const full = plan.length ? plan[plan.length - 1] : null;
-
-  // Popisky hraníc vpravo; ak by sa zrazili s popiskom kurzu, odsunú sa.
-  const marks = ([
-    [call, "margin call", "var(--warn)"],
-    [stop, "stop-out", "var(--neg)"],
-  ] as [number | null, string, string][])
-    .filter(([p]) => p != null) as [number, string, string][];
-
-  const onMove = (clientY: number, el: SVGSVGElement) => {
-    const r = el.getBoundingClientRect();
-    const p = priceAt(clientY - r.top);
-    if (p > hi || p < lo) return setHover(null);
-    setHover(snapshotAt(input, Math.round(p * 10000) / 10000));
-  };
-
-  const bandTop = y(Math.min(input.bandHigh, hi));
-  const bandBot = y(Math.max(input.bandLow, lo));
 
   return (
     <div className="flex flex-col gap-3">
@@ -128,174 +78,206 @@ export default function RiskMap({
               sub={full == null ? "plná" : `plná pri ${p4(full)}`} />
       </div>
 
-      <div ref={box} className="relative w-full">
-        <svg width={W} height={H} className="block touch-none select-none"
-             role="img"
-             aria-label="Otvorené pozície, ďalšie longy a hranice marže na cenovej osi"
-             onPointerLeave={() => setHover(null)}
-             onPointerDown={(e) => onMove(e.clientY, e.currentTarget)}
-             onPointerMove={(e) => onMove(e.clientY, e.currentTarget)}>
-          {/* pásmo — len podklad, nie značka */}
-          {bandBot > bandTop && (
-            <>
-              <rect x={X_LONG - 4} y={bandTop} width={X_END - X_LONG + 4}
-                    height={bandBot - bandTop} rx={6} fill="var(--surface)" />
-              <text x={X_END - 4} y={bandTop + 13} textAnchor="end" fontSize={10}
-                    fill="var(--faint)">pásmo</text>
-            </>
-          )}
-
-          {/* mriežka po 100 pipov */}
-          {ticks.map((t) => (
-            <g key={t}>
-              <line x1={X_LONG - 4} y1={y(t)} x2={X_END} y2={y(t)}
-                    stroke="var(--hair)" strokeWidth={1} />
-              <text x={X_AXIS - 6} y={y(t) + 3.5} textAnchor="end" fontSize={10}
-                    fill="var(--faint)" className="tabular-nums">{t.toFixed(2)}</text>
-            </g>
-          ))}
-
-          {/* doliať */}
-          {fundArea && (
-            <>
-              <path d={fundArea} fill="var(--fund)" fillOpacity={0.16} />
-              <path d={fundLine} fill="none" stroke="var(--fund)" strokeWidth={1.5}
-                    strokeLinejoin="round" />
-              {stop != null && fundAtStop > 0 && (
-                <text x={X_FUND + 4} y={y(stop) + 14} fontSize={11} fontWeight={600}
-                      fill="var(--fund)" className="tabular-nums">
-                  doliať {money(fundAtStop, 0)} €
-                </text>
-              )}
-            </>
-          )}
-
-          {/* hranice marže */}
-          {marks.map(([p, label, col]) => (
-            <g key={label}>
-              <line x1={X_LONG - 4} y1={y(p)} x2={X_END} y2={y(p)}
-                    stroke={col} strokeWidth={1} strokeDasharray="4 3" />
-              <text x={X_FUND + 4} y={y(p) - 4} fontSize={10} fill={col}>{label}</text>
-            </g>
-          ))}
-
-          {/* ďalšie longy, ktoré by grid cestou dole otvoril */}
-          {plan.map((p) => (
-            <rect key={`f${p}`} x={X_LONG + 0.5} y={y(p) - 1.5} width={BAR - 1}
-                  height={3} rx={1.5} fill="none" stroke="var(--long)"
-                  strokeOpacity={0.55} strokeWidth={1} />
-          ))}
-
-          {/* otvorené pozície */}
-          {positions.map((p) => (
-            <rect key={p.id} x={p.side === "long" ? X_LONG : X_SHORT}
-                  y={y(p.entry_price) - 1.5} width={BAR} height={3} rx={1.5}
-                  fill={p.side === "long" ? "var(--long)" : "var(--short)"} />
-          ))}
-
-          {/* aktuálny kurz */}
-          <line x1={X_LONG - 4} y1={y(px)} x2={X_END} y2={y(px)}
-                stroke="var(--ink)" strokeWidth={1.5} />
-          <circle cx={X_LONG - 4} cy={y(px)} r={3.5} fill="var(--ink)" />
-          <rect x={X_FUND} y={y(px) - 9} width={58} height={18} rx={9}
-                fill="var(--ink)" />
-          <text x={X_FUND + 29} y={y(px) + 3.5} textAnchor="middle" fontSize={11}
-                fontWeight={600} fill="var(--bg)" className="tabular-nums">
-            {px.toFixed(4)}
-          </text>
-
-          {/* zameriavač */}
-          {hover && (
-            <line x1={X_LONG - 4} y1={y(hover.price)} x2={X_END} y2={y(hover.price)}
-                  stroke="var(--ink)" strokeWidth={1} strokeDasharray="2 3"
-                  opacity={0.7} />
-          )}
-        </svg>
-
-        {hover && <Bublina s={hover} top={y(hover.price)} />}
-      </div>
-
-      <ul className="flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-muted">
-        <Znak c="var(--long)">long</Znak>
-        <Znak c="var(--short)">short</Znak>
-        <Znak c="var(--long)" hollow>ďalšie longy</Znak>
-        <Znak c="var(--fund)" area>doliať na 100 %</Znak>
-      </ul>
-
-      <Tabulka input={input} />
+      <Pas input={input} positions={positions} call={call} stop={stop} plan={plan} />
+      <Scenar input={input} call={call} stop={stop} />
     </div>
   );
 }
 
-function Znak({ c, hollow, area, children }: {
-  c: string; hollow?: boolean; area?: boolean; children: React.ReactNode;
+/** Vodorovný pás: kde ležia pozície a hranice marže. */
+function Pas({ input, positions, call, stop, plan }: {
+  input: MapInput; positions: Position[];
+  call: number | null; stop: number | null; plan: number[];
 }) {
-  return (
-    <li className="flex items-center gap-1.5">
-      <span className={area ? "h-2.5 w-3 rounded-sm" : "h-[3px] w-4 rounded-full"}
-            style={hollow ? { outline: `1px solid ${c}`, opacity: 0.6 }
-              : { background: c, opacity: area ? 0.5 : 1 }} />
-      {children}
-    </li>
-  );
-}
+  const [box, W] = useWidth();
+  const [hover, setHover] = useState<Snap | null>(null);
+  const px = input.price;
 
-function Bublina({ s, top }: { s: Snap; top: number }) {
-  const below = top < 70;
+  const entries = input.legs.map((l) => l.entry);
+  const lo = Math.min(stop ?? px - 0.03, ...entries, ...plan, px) - 0.002;
+  const hi = Math.max(input.bandHigh, px, ...entries) + 0.002;
+  const x = (p: number) => PAD + ((p - lo) / (hi - lo)) * (W - 2 * PAD);
+  const priceAt = (xx: number) => lo + ((xx - PAD) / (W - 2 * PAD)) * (hi - lo);
+
+  const every = hi - lo > 0.12 ? 0.02 : 0.01;
+  const ticks: number[] = [];
+  for (let t = Math.ceil(lo / every) * every; t <= hi; t += every) ticks.push(Number(t.toFixed(2)));
+
+  const bandL = x(Math.max(input.bandLow, lo));
+  const bandR = x(Math.min(input.bandHigh, hi));
+  const pill = Math.min(Math.max(x(px), PAD + 28), W - PAD - 28);
+
+  // Popisky hraníc: stop-out vľavo od čiary, ak je miesto, margin call
+  // vpravo — tak sa nezrazia, ani keď sú blízko seba.
+  const marks: { p: number; label: string; col: string; end: boolean }[] = [];
+  if (stop != null) marks.push({ p: stop, label: "stop-out", col: "var(--neg)", end: x(stop) > 56 });
+  if (call != null) marks.push({ p: call, label: "margin call", col: "var(--warn)", end: false });
+
+  const onMove = (clientX: number, el: SVGSVGElement) => {
+    const p = priceAt(clientX - el.getBoundingClientRect().left);
+    if (p < lo || p > hi) return setHover(null);
+    setHover(snapshotAt(input, Math.round(p * 10000) / 10000));
+  };
+
   return (
-    <div className="pointer-events-none absolute right-1 z-10 rounded-lg bg-solid
-                    px-2.5 py-1.5 text-xs shadow-lg ring-1 ring-hair"
-         style={{ top, transform: below ? "translateY(10px)" : "translateY(calc(-100% - 10px))" }}>
-      <div className="num text-[13px] font-semibold">{p4(s.price)}</div>
-      <div className="text-faint">
-        {s.longs} L / {s.shorts} S
-        {s.level != null && <> · marža {s.level.toFixed(0)} %</>}
-      </div>
-      {s.fund100 > 0 && (
-        <div className="font-semibold" style={{ color: "var(--fund)" }}>
-          doliať {money(s.fund100, 0)} €
-        </div>
-      )}
+    <div ref={box} className="w-full">
+      <svg width={W} height={H} className="block touch-pan-y select-none"
+           role="img" aria-label="Otvorené pozície, ďalšie longy a hranice marže na cenovej osi"
+           onPointerLeave={() => setHover(null)}
+           onPointerDown={(e) => onMove(e.clientX, e.currentTarget)}
+           onPointerMove={(e) => onMove(e.clientX, e.currentTarget)}>
+        {bandR > bandL && (
+          <>
+            <rect x={bandL} y={AX - TICK - 8} width={bandR - bandL} height={2 * TICK + 16}
+                  rx={6} fill="var(--surface)" />
+            <text x={bandR - 4} y={AX + TICK + 4} textAnchor="end" fontSize={10}
+                  fill="var(--faint)">pásmo</text>
+          </>
+        )}
+
+        <line x1={PAD} y1={AX} x2={W - PAD} y2={AX} stroke="var(--line)" />
+        {ticks.map((t) => (
+          <g key={t}>
+            <line x1={x(t)} y1={AX - 3} x2={x(t)} y2={AX + 3} stroke="var(--line)" />
+            <text x={x(t)} y={H - 4} textAnchor="middle" fontSize={10}
+                  fill="var(--faint)" className="tabular-nums">{t.toFixed(2)}</text>
+          </g>
+        ))}
+
+        {marks.map((m) => (
+          <g key={m.label}>
+            <line x1={x(m.p)} y1={AX - TICK - 14} x2={x(m.p)} y2={AX + TICK + 8}
+                  stroke={m.col} strokeDasharray="3 3" />
+            <text x={x(m.p) + (m.end ? -3 : 3)} y={AX - TICK - 16}
+                  textAnchor={m.end ? "end" : "start"} fontSize={10} fill={m.col}>
+              {m.label}
+            </text>
+          </g>
+        ))}
+
+        {plan.map((p) => (
+          <line key={`f${p}`} x1={x(p)} y1={AX - TICK - 4} x2={x(p)} y2={AX - 5}
+                stroke="var(--long)" strokeWidth={2} strokeOpacity={0.35}
+                strokeDasharray="3 2" />
+        ))}
+        {positions.map((p) => {
+          const up = p.side === "long";
+          return (
+            <line key={p.id} x1={x(p.entry_price)} x2={x(p.entry_price)}
+                  y1={up ? AX - TICK - 4 : AX + 5} y2={up ? AX - 5 : AX + TICK + 4}
+                  stroke={up ? "var(--long)" : "var(--short)"} strokeWidth={2}
+                  strokeLinecap="round" />
+          );
+        })}
+
+        <line x1={x(px)} y1={AX - TICK - 20} x2={x(px)} y2={AX + TICK + 8}
+              stroke="var(--ink)" strokeWidth={1.5} />
+        <rect x={pill - 28} y={2} width={56} height={18} rx={9} fill="var(--ink)" />
+        <text x={pill} y={15} textAnchor="middle" fontSize={11} fontWeight={600}
+              fill="var(--bg)" className="tabular-nums">{p4(px)}</text>
+
+        {hover && (
+          <line x1={x(hover.price)} y1={AX - TICK - 8} x2={x(hover.price)} y2={AX + TICK + 8}
+                stroke="var(--ink)" strokeDasharray="2 3" opacity={0.6} />
+        )}
+      </svg>
+
+      {/* Odčítanie pod pásom, nie bublina v ňom — pás je nízky a bublina
+          by prekryla práve tie pozície, na ktoré sa ukazuje. */}
+      <p className="mt-1 h-4 text-[11px] tabular-nums text-muted">
+        {hover ? (
+          <>
+            <b className="text-ink">{p4(hover.price)}</b>
+            {" · "}{hover.longs} L / {hover.shorts} S
+            {hover.level != null && ` · marža ${hover.level.toFixed(0)} %`}
+            {hover.fund100 > 0 && (
+              <b style={{ color: "var(--fund)" }}> · doliať {money(hover.fund100, 0)} €</b>
+            )}
+          </>
+        ) : (
+          <span className="text-faint">
+            <Znak c="var(--long)" /> long · <Znak c="var(--short)" /> short ·{" "}
+            <Znak c="var(--long)" faded /> ďalšie longy
+          </span>
+        )}
+      </p>
     </div>
   );
 }
 
-/** Rovnaké čísla v texte — graf nesmie byť jediná cesta k údaju. */
-function Tabulka({ input }: { input: MapInput }) {
-  const rows = [1.1250, 1.1200, 1.1150, 1.1100, 1.1050, 1.1000, 1.0900, 1.0800]
-    .map((p) => snapshotAt(input, p));
+function Znak({ c, faded }: { c: string; faded?: boolean }) {
   return (
-    <details className="group">
-      <summary className="cursor-pointer list-none text-xs text-faint hover:text-muted">
-        Tie isté čísla v tabuľke
-        <span className="ml-1 inline-block transition-transform group-open:rotate-90">›</span>
-      </summary>
-      <div className="mt-2 overflow-x-auto">
-        <table className="w-full text-xs tabular-nums">
-          <thead className="text-faint">
-            <tr className="text-left">
-              <th className="py-1 pr-3 font-normal">kurz</th>
-              <th className="py-1 pr-3 font-normal">pozícií</th>
-              <th className="py-1 pr-3 font-normal">marža</th>
-              <th className="py-1 font-normal">doliať</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((s) => (
-              <tr key={s.price} className="border-t border-hair">
-                <td className="py-1 pr-3">{s.price.toFixed(4)}</td>
-                <td className="py-1 pr-3">{s.longs} L / {s.shorts} S</td>
-                <td className="py-1 pr-3">
-                  {s.level == null ? "—" : `${s.level.toFixed(0)} %`}
-                </td>
-                <td className="py-1">
-                  {s.fund100 > 0 ? money(s.fund100, 0) : "—"}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+    <span className="mx-0.5 inline-block h-2.5 w-[3px] rounded-full align-[-1px]"
+          style={{ background: c, opacity: faded ? 0.35 : 1 }} />
+  );
+}
+
+/** Scenár pádu: riadok po 50 pipoch od kurzu nadol, hranice vsunuté. */
+function Scenar({ input, call, stop }: {
+  input: MapInput; call: number | null; stop: number | null;
+}) {
+  const px = input.price;
+  const floor = (stop ?? px - 0.03) - 0.001;
+  type Row = { p: number; kind?: "now" | "call" | "stop" };
+  const rows: Row[] = [{ p: px, kind: "now" }];
+  for (let p = Math.floor((px - 0.0001) / 0.005) * 0.005; p >= floor; p -= 0.005) {
+    rows.push({ p: Number(p.toFixed(4)) });
+  }
+  if (call != null && call < px) rows.push({ p: call, kind: "call" });
+  if (stop != null && stop < px) rows.push({ p: stop, kind: "stop" });
+  rows.sort((a, b) => b.p - a.p);
+  // Riadok mriežky, ktorý padne presne na hranicu, sa nezdvojí.
+  const uniq = rows.filter((r, n) => !(r.kind == null && rows.some(
+    (o, m) => m !== n && o.kind != null && Math.abs(o.p - r.p) < 0.00005)));
+
+  const tone = (lv: number) =>
+    lv < 50 ? "var(--neg)" : lv < 200 ? "var(--warn)" : "var(--pos)";
+
+  return (
+    <div>
+      <div className="mb-1 flex text-[11px] text-faint">
+        <span className="w-[62px] pl-1.5">kurz</span>
+        <span className="w-[74px]" />
+        <span className="w-[50px]">pozície</span>
+        <span className="flex-1">marža</span>
+        <span className="w-[62px] pr-1.5 text-right">doliať</span>
       </div>
-    </details>
+      {uniq.map((r) => {
+        const s = snapshotAt(input, r.p);
+        const lv = s.level ?? 0;
+        const bg = r.kind === "now" ? "bg-surface"
+          : r.kind === "call" ? "bg-warn/10" : r.kind === "stop" ? "bg-neg/10" : "";
+        return (
+          <div key={`${r.kind ?? ""}${r.p}`}
+               className={`flex items-center border-t border-hair py-1.5 text-[12.5px] ${bg}`}>
+            <span className="w-[62px] pl-1.5 tabular-nums">{p4(r.p)}</span>
+            <span className="w-[74px] truncate text-[11px] text-muted">
+              {r.kind === "now" ? <b className="text-ink">teraz</b>
+                : r.kind === "call" ? <b className="text-warn">margin call</b>
+                : r.kind === "stop" ? <b className="text-neg">stop-out</b>
+                : <span className="tabular-nums">−{pips(px, r.p)} p</span>}
+            </span>
+            <span className="w-[50px] text-[11.5px] tabular-nums text-muted">
+              {s.longs}L {s.shorts}S
+            </span>
+            <span className="flex flex-1 items-center gap-1.5">
+              <span className="h-1.5 flex-1 overflow-hidden rounded-full bg-hair">
+                <span className="block h-full rounded-full"
+                      style={{ width: `${Math.min(lv, 300) / 3}%`, background: tone(lv),
+                               opacity: lv >= 100 && lv < 200 ? 0.6 : 1 }} />
+              </span>
+              <span className="w-[38px] text-right text-[11.5px] tabular-nums">
+                {s.level == null ? "—" : `${lv.toFixed(0)} %`}
+              </span>
+            </span>
+            <span className="w-[62px] pr-1.5 text-right tabular-nums"
+                  style={{ color: s.fund100 > 0 ? "var(--fund)" : "var(--faint)",
+                           fontWeight: s.fund100 > 0 ? 600 : 400 }}>
+              {s.fund100 > 0 ? `${money(s.fund100, 0)} €` : "—"}
+            </span>
+          </div>
+        );
+      })}
+    </div>
   );
 }
