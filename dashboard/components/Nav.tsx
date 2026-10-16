@@ -35,7 +35,7 @@ function EnvToggle() {
 /** Hlavné položky sa vojdú bez orezania popisku; História a Stratégie sa
     len prezerajú, nevyžadujú dennú akciu, tak idú pod „ďalšie". */
 const MAIN = [
-  { href: "/", label: "Prehľad", icon: HomeIcon },
+  { href: "/", label: "Bot", icon: BotMark, mark: true },
   { href: "/pnl", label: "P/L", icon: ChartIcon },
   { href: "/mapa", label: "Mapa", icon: MapIcon },
   { href: "/calendar", label: "Kalendár", icon: CalendarIcon },
@@ -61,17 +61,19 @@ export default function Nav() {
               <Link
                 key={l.href}
                 href={l.href}
-                className={`rounded-md px-2.5 py-1.5 text-sm transition-colors ${
+                className={`flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-sm transition-colors ${
                   path === l.href
                     ? "bg-surface text-ink"
                     : "text-muted hover:text-ink"
                 }`}
               >
+                {"mark" in l && <BotMark size={16} />}
                 {l.label}
               </Link>
             ))}
           </nav>
-          <span className="flex-1 text-sm font-medium sm:hidden">
+          <span className="flex flex-1 items-center gap-2 text-sm font-medium sm:hidden">
+            {path === "/" && <BotMark size={20} />}
             {all.find((l) => l.href === path)?.label ?? "Trading bot"}
           </span>
           <EnvToggle />
@@ -145,8 +147,16 @@ const S = {
   strokeLinejoin: "round" as const,
 };
 
-function HomeIcon() {
-  return <svg {...S}><path d="M3 10.5 12 3l9 7.5" /><path d="M5 10v10h14V10" /></svg>;
+/** Znak aplikácie — rovnaký ako favicon (app/icon1.tsx): short, kotva, long. */
+function BotMark({ size = 20 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 32 32" aria-hidden className="shrink-0">
+      <rect width="32" height="32" rx="7" fill="#0b0b0e" />
+      <rect x="6" y="6" width="20" height="4" rx="2" fill="#4f9cf5" />
+      <rect x="4" y="14" width="24" height="4" rx="2" fill="#f4f4f5" />
+      <rect x="6" y="22" width="20" height="4" rx="2" fill="#2fc48d" />
+    </svg>
+  );
 }
 function ChartIcon() {
   return <svg {...S}><path d="M4 20V10M10 20V4M16 20v-7M22 20H2" /></svg>;

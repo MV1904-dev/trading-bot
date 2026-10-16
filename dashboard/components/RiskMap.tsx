@@ -12,7 +12,7 @@ import type { BotState, Position } from "@/lib/types";
  * Mapa rizika (zadanie 16. 10. 2026, varianta A + C), oboma smermi —
  * pri páde pribúdajú longy, pri raste shorty a každý smer má vlastný
  * margin call a stop-out:
- *  - vodorovný pás pozícií — rovnaký jazyk ako graf na Prehľade: cena
+ *  - vodorovný pás pozícií — rovnaký jazyk ako graf na hlavnej stránke: cena
  *    zľava doprava, longy nad osou, shorty pod ňou, vybledlé čiarky sú
  *    longy, ktoré grid ešte otvorí; zvislé čiary margin call a stop-out,
  *  - pod ním scenár — riadok po 50 pipoch od kurzu hore aj dole s počtom
