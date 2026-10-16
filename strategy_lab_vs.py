@@ -451,6 +451,35 @@ class GuardedGrid:
                     self.last["short"] = self.ref["short"] = c
 
 
+class ShortGrid:
+    """Len shorty (návrh Mariána 16. 10. 2026): vstup pri raste o `step` od
+    kotvy, TP −`tp`, bez SL. Kotva = bežiace minimum (ako live grid) alebo
+    posledný vstup. Shorty majú kladný swap, takže držanie nestojí nič —
+    riziko je len v cene: pri raste kurzu sa pozície hromadia."""
+
+    def __init__(self, step=0.0005, tp=0.001, cap=30, band_low=None, anchor="extreme"):
+        self.step, self.tp, self.cap = step, tp, cap
+        self.band_low, self.anchor = band_low, anchor
+        self.ref = None
+
+    def on_tp(self, p, a):
+        if a.n("short") == 0:
+            self.ref = p.tp
+
+    def on_bar(self, i, t, o, h, l, c, a):
+        if self.anchor == "extreme":
+            self.ref = min(self.ref or c, l)
+        elif self.ref is None:
+            self.ref = c
+        if self.cap is not None and a.n("short") >= self.cap:
+            return
+        if self.band_low is not None and c <= self.band_low:
+            return
+        if c - self.ref >= self.ref * self.step:
+            a.open("short", c, round(c * (1 - self.tp), 5), None, i)
+            self.ref = c
+
+
 class Real:
     """Spustí skutočnú triedu stratégie z trading/ v lab engine — overenie,
     že bot a lab počítajú to isté."""
@@ -517,15 +546,14 @@ def _gg(**kw):
 
 
 CANDIDATES = {
-    # (stratégia, násobok veľkosti pozície). 40k varianty: otázka zo
-    # 16. 10. 2026, či nie je lepšie jedna 40k pozícia než štyri 10k.
-    # Nie je — pri rovnakej max. expozícii sústredí stratu do 0,5 % pásma
-    # a pri trende účet zlikviduje (rok 1: 4 036 zásahov stop-outu).
     "G2B live (extrém)": (lambda: G2B(), 1),
     "Strážca (beží)": (_gg(), 1),
-    "Strážca + dobeh, TP +0,1 %": (_gg(catchup="tp01"), 1),
-    "LiveGrid (trading/strategy_grid_virtual.py)": (_live_grid, 1),
-    "Grid + dobeh (GridCatchup)": (_grid_catchup, 1),
+    "Short .05 TP .10 cap30": (lambda: ShortGrid(), 1),
+    "Short .05 TP .05 cap30": (lambda: ShortGrid(tp=0.0005), 1),
+    "Short .05 TP .10 cap60": (lambda: ShortGrid(cap=60), 1),
+    "Short .05 TP .10 bez stropu": (lambda: ShortGrid(cap=None), 1),
+    "Short .05 TP .10 cap30 pásmo": (lambda: ShortGrid(band_low=1.12), 1),
+    "Short .05 TP .10 cap30 kotva vstup": (lambda: ShortGrid(anchor="entry"), 1),
 }
 
 
