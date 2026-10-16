@@ -8,7 +8,7 @@ import { useLive } from "@/lib/useLive";
 
 /** Dáta pre porovnanie; zobrazenie je v components/Competition.tsx. */
 
-const ENVS = "env.eq.live,env.like.paper*";   // * = % v PostgREST
+const ENVS = "env.like.paper*";   // * = % v PostgREST; live v súťaži nie je
 
 export default function VsPage() {
   const { rows: states } = useLive<StateRow>("bot_state", (q) => q.select("*").or(ENVS));

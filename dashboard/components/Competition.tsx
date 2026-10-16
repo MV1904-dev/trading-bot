@@ -7,7 +7,9 @@ import { STRATEGY_INFO } from "@/lib/strategyInfo";
 import type { BotState, Position } from "@/lib/types";
 
 /**
- * Súťaž: živý grid proti všetkým virtuálnym účtom (paper_bot.py).
+ * Súťaž virtuálnych účtov (paper_bot.py). Živý účet v nej nie je — jeho
+ * pravidlá zastupuje „Grid (kópia live)", ktorý štartoval s ostatnými za
+ * rovnakých podmienok (zadanie 17. 10. 2026).
  *
  * Porovnáva sa KOHORTA — len pozície, ktoré daný účet otvoril od štartu
  * okna. Live si nesie pozície spred súťaže a ich zisk aj float by výsledok
@@ -22,7 +24,7 @@ export type TradeRow = { env: string; pnl_usd: number | null; opened_at: string;
 export type PosRow = Position & { env: string };
 export type StateRow = BotState & { env: string };
 
-// live neutrálne, virtuálne účty v poradí štartu
+// farby v poradí štartu účtov
 const PALETTE = ["#7c3aed", "#0891b2", "#d97706", "#db2777", "#65a30d", "#4f46e5"];
 
 export type Account = { env: string; name: string; color: string; start: string | null; note?: string };
@@ -36,9 +38,7 @@ export function accountsOf(states: StateRow[]): Account[] {
       note: (s.config?.strategy_note as string) || undefined,
     }))
     .sort((a, b) => (a.start ?? "").localeCompare(b.start ?? ""));
-  const live = states.some((s) => s.env === "live")
-    ? [{ env: "live", name: "Live grid", color: "var(--ink)", start: null }] : [];
-  return [...live, ...virt.map((v, i) => ({ ...v, color: PALETTE[i % PALETTE.length] }))];
+  return virt.map((v, i) => ({ ...v, color: PALETTE[i % PALETTE.length] }));
 }
 
 const ms = (iso: string) => Date.parse(iso);
@@ -93,9 +93,10 @@ export default function Competition({ accounts, trades, positions, start, onStar
         meta={`od ${fmt(start)}`}
         info={
           <>
-            Živý grid proti stratégiám na virtuálnych účtoch. Každý účet sa hodnotí
-            len podľa pozícií, ktoré otvoril od štartu okna — staré pozície live
-            (spred súťaže) sa nepočítajú vôbec, ani ich zisk, ani float. Výsledok je
+            Stratégie na virtuálnych účtoch. Pravidlá živého bota zastupuje
+            „Grid (kópia live)“ — začal prázdny spolu s ostatnými, takže má rovnaké
+            podmienky. Každý účet sa hodnotí len podľa pozícií, ktoré otvoril od
+            štartu okna. Výsledok je
             čistý zisk uzavretých obchodov (po províziách a swape) plus float
             a swap pozícií, ktoré sú z nich ešte otvorené. Virtuálny účet verne
             simuluje cTrader na živých cenách: spread, TP medzi kotáciami, provízia
@@ -210,7 +211,7 @@ function useWidth() {
 }
 
 /** Kumulatívny čistý zisk uzavretých obchodov kohorty — schodíky po
-    každom zavretí. Float sa nekreslí: jeho históriu pre live nemáme. */
+    každom zavretí. Float sa nekreslí — jeho história sa neukladá. */
 function RealizedChart({ accounts, trades, t0 }: {
   accounts: Account[]; trades: TradeRow[]; t0: number;
 }) {
