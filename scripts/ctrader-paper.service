@@ -1,0 +1,40 @@
+# Virtuálny bot Strážca (paper_bot.py) — súťaž so živým gridom.
+#
+#     sudo cp scripts/ctrader-paper.service /etc/systemd/system/
+#     sudo systemctl daemon-reload && sudo systemctl enable --now ctrader-paper
+#
+# K brokerovi sa NEPRIPÁJA — ceny číta z data/feed.json, ktorý zapisuje
+# živý ctrader-bot. Pád alebo zastavenie tejto služby živého bota
+# neovplyvní; zastavenie živého bota len pozastaví túto (feed zastará).
+
+[Unit]
+Description=Virtuálny bot Strážca (simulovaný cTrader účet)
+Documentation=https://github.com/MV1904-dev/trading-bot
+After=network-online.target ctrader-bot.service
+Wants=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=marian
+Group=marian
+WorkingDirectory=/home/marian/trading-bot
+ExecStart=/home/marian/trading-bot/.venv/bin/python -u paper_bot.py
+KillSignal=SIGINT
+TimeoutStopSec=20
+SuccessExitStatus=130
+Restart=on-failure
+RestartSec=15
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=ctrader-paper
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=read-only
+ReadWritePaths=/home/marian/trading-bot
+# Nižšia priorita než živý bot — o CPU sa nikdy nebije s obchodovaním.
+Nice=10
+
+[Install]
+WantedBy=multi-user.target

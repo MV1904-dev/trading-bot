@@ -43,6 +43,13 @@ class Grid25Config:
     # a po zapnutí platí štandardná gap logika — žiadny výbuch vstupov.
     long_enabled: bool = True
     short_enabled: bool = True
+    # Kotva: "extreme" = bežiace maximum/minimum (tak live obchoduje od
+    # začiatku), "entry" = posledný vstup (#16, 6. 10. 2026). #16 je v kóde,
+    # ale na server sa nenasadil a lab (strategy_lab_ladder.py, sim_g2b anchor=)
+    # ukázal, že prázdnu stranu v trende zmrazí (40 cyklov namiesto 296 za
+    # live obdobie). Prepína sa cez .env CTRADER_GRID_ANCHOR — nasadenie
+    # kódu tak samo osebe správanie živého gridu nezmení.
+    anchor: str = "extreme"
 
     @property
     def cap(self) -> int:
@@ -81,10 +88,11 @@ class Grid25(StrategyBase):
         # odstup po každom reštarte rozbil. Posledný vstup = najvyššie
         # trade_id (rastie monotónne), nie extrém — po flat resete a novom
         # vstupe by extrém ukazoval inam.
-        if self.longs:
-            self.ref_long = self.longs[max(self.longs)]
-        if self.shorts:
-            self.ref_short = self.shorts[max(self.shorts)]
+        if self.cfg.anchor == "entry":
+            if self.longs:
+                self.ref_long = self.longs[max(self.longs)]
+            if self.shorts:
+                self.ref_short = self.shorts[max(self.shorts)]
 
     # --- jadro -------------------------------------------------------------
     def on_bar(self, bar: Bar, atr: Optional[float]) -> list[Signal]:
@@ -103,10 +111,15 @@ class Grid25(StrategyBase):
         # Kotva sa teraz mení len na dvoch miestach: pri vstupe (on_trade_
         # opened) a keď strana ostane prázdna (on_trade_closed). Odstup
         # medzi vstupmi je tým pádom vždy aspoň jeden krok.
-        if self.ref_long is None:
-            self.ref_long = c
-        if self.ref_short is None:
-            self.ref_short = c
+        if cfg.anchor == "entry":
+            if self.ref_long is None:
+                self.ref_long = c
+            if self.ref_short is None:
+                self.ref_short = c
+        else:
+            # bežiace extrémy — správanie live gridu pred #16
+            self.ref_long = max(self.ref_long or c, bar.high)
+            self.ref_short = min(self.ref_short or c, bar.low)
 
         if atr is None:
             return []

@@ -12,6 +12,7 @@
 | Časť | Kde | Ako sa spúšťa |
 |---|---|---|
 | **Bot** (`bot_ctrader.py`) | server Hetzner, `62.238.48.134`, používateľ `marian`, priečinok `/home/marian/trading-bot` | systemd služba `ctrader-bot` (viď `scripts/ctrader-bot.service`) |
+| **Virtuálny bot Strážca** (`paper_bot.py`) | ten istý server | systemd služba `ctrader-paper` (viď `scripts/ctrader-paper.service`); k brokerovi sa nepripája, ceny číta z `data/feed.json` od živého bota |
 | **Daily Plan** | ten istý server | `ctrader-plan.timer`, denne 21:35 UTC (Ne–Št); beží ďalej, ale v dashboarde sa už nezobrazuje — plány končia v Supabase a v Telegrame |
 | **Dashboard** (`dashboard/`) | Vercel, projekt `trading-bot-dashboard` | automaticky pri každom pushi do `main` |
 | **Databáza pre dashboard** | Supabase | — |
@@ -101,6 +102,8 @@ cd dashboard && npm install && npm run build && npm run start   # http://localho
 | `CTRADER_BAND_LOW` | pod touto cenou sa **neotvárajú shorty** (default 1,1250) |
 | `CTRADER_BAND_HIGH` | nad touto cenou sa **neotvárajú longy** (default 1,1600) |
 | `CTRADER_SWAP_AUTO` | `0` vypne automatiku krokov podľa swapov |
+| `CTRADER_GRID_ANCHOR` | kotva gridu: `extreme` (default, bežiace max/min — takto live obchoduje) alebo `entry` (#16, posledný vstup) |
+| `PAPER_CAPITAL` | štartovací kapitál virtuálneho účtu (default 15 200 €) — platí len pri prvom štarte, potom je v `data/paper/paper.db` |
 | `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` | notifikácie a príkazy |
 | `SUPABASE_URL`, `SUPABASE_SERVICE_KEY` | zrkadlenie do dashboardu |
 | `ANTHROPIC_API_KEY` | nepovinné; bez neho len nebežia AI posudky |
@@ -167,12 +170,50 @@ alebo odmietnutia `PGRST`.
 - **Geometria gridu.** Lab overil len G2B (krok 0,15 % / 0,225 %). Automatika
   podľa swapov nastavuje hustejšie kroky — je to vedomý experiment, nie
   lab-validovaný stav.
-- **Kotva gridu je posledný vstup, nie extrém.** Odstup medzi vstupmi je
-  tým pádom vždy aspoň jeden krok. Do 6. 10. 2026 to boli bežiace extrémy
-  a každý medzipokles kotvu stiahol — shorty vtedy padali 4–6 pipov od seba
-  pri kroku 11,2 a 31 otvorených pozícií stlačilo margin level na 99,6 %.
-  Kotvy sa obnovujú aj po reštarte (`restore`), inak by sa odstup rozbil.
+- **Kotva gridu sa volí v `.env` (`CTRADER_GRID_ANCHOR`).** Default
+  `extreme` = bežiace extrémy, takto live obchoduje: každý medzipokles kotvu
+  stiahne, takže vstupy padajú aj 4–6 pipov od seba pri kroku 11,2 (6. 10.
+  to pri 31 pozíciách stlačilo margin level na 99,6 %). `entry` = #16, kotva
+  je posledný vstup a odstup je vždy aspoň krok — ale lab ukázal, že prázdnu
+  stranu v trende zmrazí (40 cyklov namiesto 296 za live obdobie). #16 sa na
+  server nikdy nenasadil; prepínač existuje od 16. 10. 2026, aby nasadenie
+  kódu samo nezmenilo správanie živého gridu.
 - **Pásmo nie je symetrická ochrana.** `band_low` vypína len **shorty**,
   `band_high` len **longy**. Pod dolnou hranou teda longy pribúdajú ďalej —
   pásmo nie je stop. Kto chce zastaviť nakupovanie pri páde, potrebuje
   pauzu vstupov alebo vypnutie strany, nie posun pásma.
+
+## Virtuálny bot Strážca (súťaž od 19. 10. 2026)
+
+Súťažná stratégia (`trading/strategy_guard.py`) beží na **simulovanom**
+cTrader účte, nie na demo účte u brokera — Spotware drží na jednu
+aplikáciu jedno app-auth spojenie a druhý proces by odpojil živého bota.
+
+- **Ceny:** živý bot každých 10 s prepíše `data/feed.json` (bid, ask,
+  extrémy zo spot streamu medzi vzorkami, swapové sadzby účtu). Píše len
+  live inštancia. Keď feed zastará (živý bot stojí), virtuálny bot nič
+  neotvára a čaká.
+- **Účtovanie:** `trading/paper_broker.py` — vstup za ask/bid, TP na
+  extrémoch medzi kotáciami, provízia 0,526 €, swap 17:00 NY so sadzbami
+  live účtu (streda 3×), marža z väčšej strany, stop-out 50 %.
+- **Dáta:** `data/paper/paper.db` (rovnaká schéma ako live), log
+  `data/paper/paper_bot.log`, zrkadlo v Supabase s `env='paper'`.
+  Dashboard: prepínač **SIM** a stránka **Súťaž** (Ďalšie → Súťaž).
+- **Príkazy z dashboardu nečíta** — tabuľka `commands` nemá env a príkazy
+  patria živému botovi. V režime SIM preto dashboard skryje pauzu aj
+  zatváranie pozícií.
+
+Inštalácia (raz):
+
+```bash
+ssh hetzner '/home/marian/trading-bot/scripts/bot_deploy.sh main'     # živý bot začne písať feed
+ssh hetzner 'sudo cp /home/marian/trading-bot/scripts/ctrader-paper.service /etc/systemd/system/ \
+  && sudo systemctl daemon-reload && sudo systemctl enable --now ctrader-paper'
+ssh hetzner 'journalctl -u ctrader-paper -n 20 --no-pager'
+```
+
+Overenie na histórii (bez Supabase): `python3 paper_bot.py --replay 2026-08-06`
+— musí sedieť so `strategy_lab_vs.py` (232 cyklov, výsledok ≈ +770 €).
+
+Reset súťaže (nový štart s čistým účtom): zastaviť službu, zmazať
+`data/paper/paper.db` a v Supabase riadky s `env='paper'`, spustiť službu.

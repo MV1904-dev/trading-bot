@@ -60,6 +60,10 @@ NY_TZ = ZoneInfo("America/New_York")   # FX týždeň: Ne 17:00 → Pia 17:00 NY
 
 # Sviečky pre Daily Plan builder — bot ich sype, plánovač číta.
 PLAN_CANDLES = ROOT / "data" / "plan_candles.json"
+# Cenový feed pre virtuálny bot (paper_bot.py). Ten sa k brokerovi
+# nepripája — Spotware drží na aplikáciu jedno app-auth spojenie a to
+# patrí tomuto procesu. Len live inštancia (demo by prepisovala live ceny).
+FEED_PATH = ROOT / "data" / "feed.json"
 
 
 def _iso_utc(ts: float | None) -> str | None:
@@ -93,6 +97,10 @@ class CTraderBotConfig:
         default_factory=lambda: float(os.getenv("CTRADER_BAND_LOW", "1.1200")))
     BAND_HIGH: float = field(
         default_factory=lambda: float(os.getenv("CTRADER_BAND_HIGH", "1.1600")))
+    # Kotva gridu: "extreme" (bežiace max/min, takto live obchoduje) alebo
+    # "entry" (#16, posledný vstup). Viď Grid25Config.anchor.
+    GRID_ANCHOR: str = field(
+        default_factory=lambda: os.getenv("CTRADER_GRID_ANCHOR", "extreme"))
     SWAP_TIERS: tuple = (
         (0.25, 0.0010),   # náklad ≤ 0,25 €/deň → krok ±0,10 %
         (0.50, 0.0013),   # ≤ 0,50 €/deň        → krok ±0,13 %
@@ -172,7 +180,8 @@ class CTraderBot:
                                    step_short=cfg.STEP_SHORT,
                                    step_long=cfg.STEP_LONG,
                                    band_low=cfg.BAND_LOW,
-                                   band_high=cfg.BAND_HIGH))
+                                   band_high=cfg.BAND_HIGH,
+                                   anchor=cfg.GRID_ANCHOR))
         grid.id = "Grid25-G2B-CT"
         # Swapová automatika si kroky pamätá v DB — po reštarte musia
         # zodpovedať poslednému rozhodnutiu, nie defaultom z configu.
@@ -434,6 +443,7 @@ class CTraderBot:
         self._refresh_sync_snapshot()
         self._push_calendar()
         self._dump_plan_candles()
+        self._write_feed(px)
         if self.plan_runner is not None:
             try:
                 self.plan_runner.tick(px["mid"] if px else None)
@@ -1216,6 +1226,32 @@ class CTraderBot:
                      len(data["h1"]), len(data["d1"]))
         except OSError as exc:
             log.warning("Zápis sviečok zlyhal: %s", exc)
+
+    def _write_feed(self, px: dict | None) -> None:
+        """Kotácia pre virtuálny bot. Nikdy nesmie zhodiť obchodovanie —
+        akákoľvek chyba sa len zaloguje a virtuálny bot počká."""
+        if self.cfg.DEMO or px is None:
+            return
+        try:
+            ext = self.broker.take_extremes() or {}
+            cap = self._capital or {}
+            data = {
+                "ts": time.time(),
+                "bid": px["bid"], "ask": px["ask"],
+                "bid_hi": ext.get("bid_hi"), "bid_lo": ext.get("bid_lo"),
+                "ask_hi": ext.get("ask_hi"), "ask_lo": ext.get("ask_lo"),
+                "swap_long": cap.get("swap_long"),
+                "swap_short": cap.get("swap_short"),
+                "swap_rollover_3days": cap.get("swap_rollover_3days"),
+                "connected": self.broker.is_connected(),
+            }
+            tmp = FEED_PATH.with_suffix(".tmp")
+            tmp.write_text(json.dumps(data))
+            tmp.replace(FEED_PATH)          # atomicky — čitateľ nevidí polovicu
+        except Exception as exc:  # noqa: BLE001
+            if not getattr(self, "_feed_warned", False):
+                self._feed_warned = True
+                log.warning("Zápis feedu pre virtuálny bot zlyhal: %s", exc)
 
     def _push_calendar(self) -> None:
         """Nahrá high-impact udalosti do Supabase (raz za hodinu)."""

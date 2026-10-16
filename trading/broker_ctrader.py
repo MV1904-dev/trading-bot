@@ -101,6 +101,10 @@ class CTraderBroker:
         self._bid: Optional[float] = None
         self._ask: Optional[float] = None
         self._spot_ts = 0.0
+        # Extrémy bid/ask od posledného take_extremes() — virtuálny bot
+        # (paper_bot.py) podľa nich plní TP, ktoré padnú medzi 10 s vzorkami.
+        self._ext: Optional[list] = None          # [bid_hi, bid_lo, ask_hi, ask_lo]
+        self._ext_lock = threading.Lock()
         self._execs: dict[int, object] = {}       # orderId -> ExecutionEvent
         self._exec_lock = threading.Lock()
         self._exec_queue: "queue.Queue[object]" = queue.Queue()
@@ -334,6 +338,16 @@ class CTraderBroker:
             if getattr(msg, "ask", 0):
                 self._ask = msg.ask * PRICE_SCALE
             self._spot_ts = time.time()
+            if self._bid is not None and self._ask is not None:
+                with self._ext_lock:
+                    e = self._ext
+                    if e is None:
+                        self._ext = [self._bid, self._bid, self._ask, self._ask]
+                    else:
+                        e[0] = max(e[0], self._bid)
+                        e[1] = min(e[1], self._bid)
+                        e[2] = max(e[2], self._ask)
+                        e[3] = min(e[3], self._ask)
         elif name == "ProtoOAExecutionEvent":
             oid = getattr(getattr(msg, "order", None), "orderId", 0)
             with self._exec_lock:
@@ -419,6 +433,14 @@ class CTraderBroker:
                 "spread": self._ask - self._bid,
                 "age_s": time.time() - self._spot_ts,
                 "tradeable": self._ready.is_set()}
+
+    def take_extremes(self) -> Optional[dict]:
+        """Extrémy bid/ask od posledného volania (a vynuluje ich)."""
+        with self._ext_lock:
+            e, self._ext = self._ext, None
+        if e is None:
+            return None
+        return {"bid_hi": e[0], "bid_lo": e[1], "ask_hi": e[2], "ask_lo": e[3]}
 
     # Sekundy na jeden bar podľa periódy — pre výpočet fromTimestamp.
     _PERIOD_S = {"M5": 300, "M15": 900, "M30": 1800, "H1": 3600,
