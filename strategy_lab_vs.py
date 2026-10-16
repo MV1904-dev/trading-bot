@@ -467,6 +467,11 @@ class Real:
         self.s.on_trade_closed(p.tag, p.side, p.tp)
 
     def on_bar(self, i, t, o, h, l, c, a):
+        # pozície zavreté stop-outom (engine) musí stratégia tiež „vidieť"
+        alive = {p.tag for p in a.pos}
+        for book, side in ((self.s.longs, "long"), (self.s.shorts, "short")):
+            for tid in [k for k in book if k not in alive]:
+                self.s.on_trade_closed(tid, side, c)
         pc = self.pc if self.pc is not None else o
         tr = max(h - l, abs(h - pc), abs(l - pc))
         self.atr = tr if self.atr is None else self.atr * 13 / 14 + tr / 14
@@ -491,6 +496,16 @@ B = (1.12, 1.16)
 B = (1.12, 1.16)
 
 
+def _live_grid():
+    from trading.strategy_grid_virtual import LiveGrid
+    return Real(LiveGrid())
+
+
+def _grid_catchup():
+    from trading.strategy_grid_virtual import GridCatchup
+    return Real(GridCatchup())
+
+
 def _guard():
     from trading.strategy_guard import GuardGrid
     return Real(GuardGrid())
@@ -509,7 +524,8 @@ CANDIDATES = {
     "G2B live (extrém)": (lambda: G2B(), 1),
     "Strážca (beží)": (_gg(), 1),
     "Strážca + dobeh, TP +0,1 %": (_gg(catchup="tp01"), 1),
-    "Strážca + dobeh, TP po úrovniach": (_gg(catchup="ladder"), 1),
+    "LiveGrid (trading/strategy_grid_virtual.py)": (_live_grid, 1),
+    "Grid + dobeh (GridCatchup)": (_grid_catchup, 1),
 }
 
 

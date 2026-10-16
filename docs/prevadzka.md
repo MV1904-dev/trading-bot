@@ -183,37 +183,59 @@ alebo odmietnutia `PGRST`.
   pásmo nie je stop. Kto chce zastaviť nakupovanie pri páde, potrebuje
   pauzu vstupov alebo vypnutie strany, nie posun pásma.
 
-## Virtuálny bot Strážca (súťaž od 19. 10. 2026)
+## Virtuálne účty — súťaž stratégií (od 16. 10. 2026)
 
-Súťažná stratégia (`trading/strategy_guard.py`) beží na **simulovanom**
-cTrader účte, nie na demo účte u brokera — Spotware drží na jednu
-aplikáciu jedno app-auth spojenie a druhý proces by odpojil živého bota.
+Služba `ctrader-paper` (`paper_bot.py`) prevádzkuje **viac virtuálnych
+účtov naraz** na jednom cenovom feede. Ktoré to sú, určuje
+`trading/paper_registry.py`:
+
+| env | stratégia | čo testuje |
+|---|---|---|
+| `paper` | Strážca (`trading/strategy_guard.py`) | grid s trendovou poistkou |
+| `paper-grid` | Grid (kópia live) (`trading/strategy_grid_virtual.py`) | kontrola — rovnaký grid ako live na čistom účte |
+| `paper-dobeh` | Grid + dobeh | live grid, pri skoku o k krokov otvorí k pozícií naraz (len v pásme, max 6) |
+
+Virtuálne účty sa k brokerovi **nepripájajú** (Spotware drží na aplikáciu
+jedno app-auth spojenie a to patrí živému botovi).
 
 - **Ceny:** živý bot každých 10 s prepíše `data/feed.json` (bid, ask,
-  extrémy zo spot streamu medzi vzorkami, swapové sadzby účtu). Píše len
-  live inštancia. Keď feed zastará (živý bot stojí), virtuálny bot nič
-  neotvára a čaká.
+  extrémy zo spot streamu, swapové sadzby účtu). Keď feed zastará, virtuálne
+  účty nič neotvárajú.
 - **Účtovanie:** `trading/paper_broker.py` — vstup za ask/bid, TP na
   extrémoch medzi kotáciami, provízia 0,526 €, swap 17:00 NY so sadzbami
   live účtu (streda 3×), marža z väčšej strany, stop-out 50 %.
-- **Dáta:** `data/paper/paper.db` (rovnaká schéma ako live), log
-  `data/paper/paper_bot.log`, zrkadlo v Supabase s `env='paper'`.
-  Dashboard: prepínač **SIM** a stránka **Súťaž** (Ďalšie → Súťaž).
-- **Príkazy z dashboardu nečíta** — tabuľka `commands` nemá env a príkazy
-  patria živému botovi. V režime SIM preto dashboard skryje pauzu aj
-  zatváranie pozícií.
+- **Dáta:** každý účet vlastná SQLite v `data/paper/`, log
+  `data/paper/paper_bot.log`, zrkadlo v Supabase s vlastným `env`.
+  Dashboard: prepínač **SIM** + výber účtu pod hlavičkou, stránka
+  **Súťaž** (Ďalšie → Súťaž) — rebríček všetkých účtov v spoločnom okne.
+- **Príkazy z dashboardu nečítajú** — tabuľka `commands` nemá env, patria
+  živému botovi. V režime SIM dashboard skryje pauzu aj zatváranie.
 
-Inštalácia (raz):
+**Pridanie stratégie:** trieda v `trading/` (rozhranie `StrategyBase`,
+voliteľne `on_feed(feed, mid)`), overenie v `strategy_lab_vs.py` cez
+adaptér `Real`, záznam vo `VIRTUALS` (nový `env` začínajúci „paper",
+nový súbor DB) a nasadenie:
 
 ```bash
-ssh hetzner '/home/marian/trading-bot/scripts/bot_deploy.sh main'     # živý bot začne písať feed
-ssh hetzner 'sudo cp /home/marian/trading-bot/scripts/ctrader-paper.service /etc/systemd/system/ \
-  && sudo systemctl daemon-reload && sudo systemctl enable --now ctrader-paper'
-ssh hetzner 'journalctl -u ctrader-paper -n 20 --no-pager'
+ssh hetzner '/home/marian/trading-bot/scripts/paper_deploy.sh'
 ```
 
-Overenie na histórii (bez Supabase): `python3 paper_bot.py --replay 2026-08-06`
-— musí sedieť so `strategy_lab_vs.py` (232 cyklov, výsledok ≈ +770 €).
+Reštartuje len `ctrader-paper`, živý bot beží ďalej. Bežiacu stratégiu
+nemeníme — zmena = nový záznam s novým env, inak sa história pomieša.
 
-Reset súťaže (nový štart s čistým účtom): zastaviť službu, zmazať
-`data/paper/paper.db` a v Supabase riadky s `env='paper'`, spustiť službu.
+Inštalácia služby (raz):
+
+```bash
+ssh hetzner 'sudo cp /home/marian/trading-bot/scripts/ctrader-paper.service /etc/systemd/system/ \
+  && sudo systemctl daemon-reload && sudo systemctl enable --now ctrader-paper'
+```
+
+Overenie na histórii (bez Supabase), musí sedieť so `strategy_lab_vs.py`:
+
+```bash
+python3 paper_bot.py --replay 2026-08-06 --strategy paper        # +766 €
+python3 paper_bot.py --replay 2026-08-06 --strategy paper-grid   # −2 023 €
+```
+
+Reset jedného účtu: zastaviť službu, zmazať jeho DB v `data/paper/`
+a v Supabase riadky s jeho `env`, spustiť službu.

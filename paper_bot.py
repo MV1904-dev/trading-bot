@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""Virtuálny bot — súťažná stratégia Strážca na simulovanom cTrader účte.
+"""Virtuálne účty — súťažné stratégie na simulovanom cTrader účte.
+
+Ktoré stratégie bežia, určuje trading/paper_registry.py (každá vlastná DB
+a env v Supabase). Prvá bola Strážca (16. 10. 2026).
 
 Zadanie 16. 10. 2026: vlastná stratégia na virtuálnom účte, verná
 simulácia cTradera, súťaž so živým gridom od pondelka 19. 10.
@@ -20,6 +23,7 @@ nemá env a príkazy patria živému botovi.
 
     python3 paper_bot.py                         # prevádzka (systemd ctrader-paper)
     python3 paper_bot.py --replay 2026-08-06     # test na histórii z labu, bez Supabase
+    python3 paper_bot.py --replay 2026-08-06 --strategy paper-dobeh
 """
 
 from __future__ import annotations
@@ -43,7 +47,8 @@ from trading.botdb import BotDB  # noqa: E402
 from trading.macro import MacroCalendar  # noqa: E402
 from trading.paper_broker import PaperAccount, Quote  # noqa: E402
 from trading.strategy_base import Bar  # noqa: E402
-from trading.strategy_guard import GuardConfig, GuardGrid  # noqa: E402
+from trading.paper_registry import VIRTUALS, Virtual  # noqa: E402
+from trading.strategy_base import StrategyBase  # noqa: E402
 from trading.sync_supabase import SupabaseSync  # noqa: E402
 
 log = logging.getLogger("paper_bot")
@@ -65,10 +70,11 @@ def _iso(ts: float | None) -> str | None:
 
 class PaperBot:
     def __init__(self, db_path: Path, capital: float, sync: SupabaseSync | None,
-                 macro: MacroCalendar | None):
+                 macro: MacroCalendar | None, spec: Virtual = VIRTUALS[0]):
+        self.spec = spec
         self.db = BotDB(db_path)
         self.acct = PaperAccount(self.db, capital)
-        self.strat = GuardGrid(GuardConfig())
+        self.strat: StrategyBase = spec.make()
         self.sync = sync
         self.macro = macro
         self.bar: Bar | None = None
@@ -104,27 +110,31 @@ class PaperBot:
         try:
             data = json.loads(PLAN_CANDLES.read_text())
         except (OSError, json.JSONDecodeError) as exc:
-            log.warning("Zahriatie trendu zlyhalo (%s) — trend bude neznámy, "
-                        "kým nepribudne %d H1 barov.", exc, GuardConfig().ema_slow // 2)
+            log.warning("[%s] Zahriatie z H1 sviečok zlyhalo (%s).", self.spec.name, exc)
             return
         cur_hour = int(now // 3600)
         bars = [Bar(c["time"], c["o"], c["h"], c["l"], c["c"])
                 for c in data.get("h1", []) if int(c["time"] // 3600) < cur_hour]
         self.strat.warmup(bars)
-        log.info("Trend zahriaty z %d H1 barov: %s", len(bars), self.strat.status_line())
+        log.info("[%s] zahriate z %d H1 barov: %s", self.spec.name, len(bars),
+                 self.strat.status_line())
 
     # --- jedna kotácia ----------------------------------------------------------
     def step(self, q: Quote, swap_long: float, swap_short: float,
              triple_dow: int, connected: bool = True) -> None:
         a = self.acct
+        if hasattr(self.strat, "on_feed"):
+            self.strat.on_feed(self.feed, q.mid)
         a.rollover(q, swap_long, swap_short, triple_dow)
         for tid, side, px in a.check_tp(q):
             self.strat.on_trade_closed(tid, side, px)
-            log.info("TP #%d %s @ %.5f", tid, side, px)
+            log.info("[%s] TP #%d %s @ %.5f", self.spec.name, tid, side, px)
         for tid, side, px in a.enforce_level(q, a.stop_out_level, "stop-out"):
             self.strat.on_trade_closed(tid, side, px)
-        for tid, side, px in a.enforce_level(q, self.strat.cfg.guard_ml, "strážca marže"):
-            self.strat.on_trade_closed(tid, side, px)
+        guard = getattr(self.strat.cfg, "guard_ml", None)
+        if guard:
+            for tid, side, px in a.enforce_level(q, guard, "strážca marže"):
+                self.strat.on_trade_closed(tid, side, px)
         self.last_q = q
         self.blocked = self._blocked_reason(q, connected)
         self._aggregate(q)
@@ -168,8 +178,8 @@ class PaperBot:
             self.strat.on_trade_opened(tid, sig.side, entry)
             self.db.log_signal(self.strat.id, sig.side, entry, atr or 0.0,
                                q.ask - q.bid, "executed", sig.reason, sig.context)
-            log.info("Vstup #%d %s @ %.5f TP %.5f — %s", tid, sig.side, entry,
-                     sig.tp_price, sig.reason)
+            log.info("[%s] vstup #%d %s @ %.5f TP %.5f — %s", self.spec.name, tid,
+                     sig.side, entry, sig.tp_price, sig.reason)
         s = self.strat
         self.db.meta_set("ref", f"{s.ref_long or 0}|{s.ref_short or 0}|"
                                 f"{s.last_long}|{s.last_short}")
@@ -177,63 +187,20 @@ class PaperBot:
             self.db.meta_set("atr", self.atr)
 
     # --- prevádzka ---------------------------------------------------------------
-    def read_feed(self) -> tuple[Quote, dict] | None:
-        try:
-            f = json.loads(FEED.read_text())
-        except (OSError, json.JSONDecodeError):
-            return None
-        q = Quote(f["ts"], f["bid"], f["ask"], f.get("bid_hi"), f.get("ask_lo"),
-                  f.get("bid_lo"), f.get("ask_hi"))
-        return q, f
-
-    def run(self) -> None:
+    def start(self) -> None:
         self.warmup_from_plan_candles(time.time())
         if not self.db.meta_get("started_at"):
             self.db.meta_set("started_at", time.time())
-        if self.sync is not None and self.sync.enabled:
-            threading.Thread(target=self._push_loop, name="sb-push", daemon=True).start()
-        last_ts = 0.0
-        stale_logged = False
-        while True:
-            got = self.read_feed()
-            if got is not None:
-                q, f = got
-                self.feed = f
-                if q.ts > last_ts:
-                    last_ts = q.ts
-                    stale_logged = False
-                    try:
-                        self.step(q, f.get("swap_long") or 0.0, f.get("swap_short") or 0.0,
-                                  int(f.get("swap_rollover_3days") or 3),
-                                  bool(f.get("connected", True)))
-                    except Exception:  # noqa: BLE001
-                        log.exception("Spracovanie kotácie zlyhalo")
-                elif time.time() - q.ts > FEED_STALE_S and not stale_logged:
-                    stale_logged = True
-                    log.warning("Feed zo živého bota je starý %.0f s — čakám.",
-                                time.time() - q.ts)
-            if self.macro is not None:
-                self.macro.refresh()
-            try:
-                self._prepare_snapshot()
-            except Exception:  # noqa: BLE001
-                log.exception("Príprava snapshotu zlyhala")
-            time.sleep(POLL_S)
 
-    # --- Supabase -----------------------------------------------------------------
-    def _push_loop(self) -> None:
-        while True:
-            with self._lock:
-                snap = dict(self._snap)
-            if snap:
-                try:
-                    self.sync.push(snap)
-                    confirmed = self.sync.confirmed_trades_until
-                    with self._lock:
-                        self._confirmed = confirmed
-                except Exception:  # noqa: BLE001
-                    log.exception("Push do Supabase zlyhal")
-            time.sleep(PUSH_EVERY_S)
+    def push(self) -> None:
+        """Volá push vlákno — len odošle hotový snapshot, DB nečíta."""
+        with self._lock:
+            snap = dict(self._snap)
+        if not snap or self.sync is None:
+            return
+        self.sync.push(snap)
+        with self._lock:
+            self._confirmed = self.sync.confirmed_trades_until
 
     def _prepare_snapshot(self) -> None:
         if self.sync is None or not self.sync.enabled or self.last_q is None:
@@ -283,9 +250,8 @@ class PaperBot:
         used_sum = n * 10_000 / a.leverage      # dashboard čaká súčet, hedging si prepočíta sám
         eq_true = bal + floating + a.open_swap()
         used = a.used_margin()
-        s = self.strat
-        tr = s.trend()
-        c = s.cfg
+        cfg = self._config()
+        c = self.strat.cfg
         state = {
             "running": True, "data_at": _iso(time.time()),
             "paused": False, "paused_until": None,
@@ -300,21 +266,7 @@ class PaperBot:
             "margin_level": eq_true / used * 100 if used else None,
             "swap_long": self.feed.get("swap_long"), "swap_short": self.feed.get("swap_short"),
             "swap_rollover_3days": self.feed.get("swap_rollover_3days"),
-            "config": {
-                "symbol": "EURUSD", "qty": c.qty, "tp_pct": c.tp_pct,
-                "step_long": c.step if tr >= 0 else c.step_ct,
-                "step_short": c.step if tr <= 0 else c.step_ct,
-                "long_enabled": True, "short_enabled": True,
-                "band_low": c.band_low, "band_high": c.band_high,
-                "ref_long": s.ref_long, "ref_short": s.ref_short,
-                "atr": self.atr, "atr_mult": c.atr_mult,
-                "capacity": f"{c.cap} v trende / {c.cap_ct} proti",
-                "trend": tr, "ema_fast": s.fast.v, "ema_slow": s.slow.v,
-                "strategy_name": "Strážca", "virtual": True,
-                "started_at": _iso(float(self.db.meta_get("started_at") or 0) or None),
-                "stopouts": a.stopouts,
-                "strategies": [s.status_line()],
-            },
+            "config": cfg,
         }
         snap = {
             "state": state, "positions": positions, "trades": trades,
@@ -324,6 +276,38 @@ class PaperBot:
         }
         with self._lock:
             self._snap = snap
+
+    def _config(self) -> dict:
+        """bot_state.config — spoločné polia + to, čo daná stratégia má."""
+        s, c = self.strat, self.strat.cfg
+        cfg = {
+            "symbol": "EURUSD", "qty": c.qty, "tp_pct": c.tp_pct,
+            "band_low": c.band_low, "band_high": c.band_high,
+            "ref_long": s.ref_long, "ref_short": s.ref_short,
+            "atr": self.atr, "atr_mult": c.atr_mult,
+            "strategy_name": self.spec.name, "strategy_note": self.spec.note,
+            "virtual": True,
+            "started_at": _iso(float(self.db.meta_get("started_at") or 0) or None),
+            "stopouts": self.acct.stopouts,
+            "strategies": [s.status_line()],
+        }
+        if hasattr(s, "trend"):                 # Strážca
+            tr = s.trend()
+            cfg.update({
+                "step_long": c.step if tr >= 0 else c.step_ct,
+                "step_short": c.step if tr <= 0 else c.step_ct,
+                "long_enabled": True, "short_enabled": True,
+                "capacity": f"{c.cap} v trende / {c.cap_ct} proti",
+                "trend": tr, "ema_fast": s.fast.v, "ema_slow": s.slow.v,
+            })
+        else:                                   # grid (Grid25 a odvodené)
+            cfg.update({
+                "step_long": c.step_long, "step_short": c.step_short,
+                "long_enabled": c.long_enabled, "short_enabled": c.short_enabled,
+                "capacity": f"{c.base_levels}+{c.reserve_levels}",
+                "base_levels": c.base_levels, "reserve_levels": c.reserve_levels,
+            })
+        return cfg
 
     def _daily_rows(self) -> list[dict]:
         acc: dict[tuple, dict] = {}
@@ -348,9 +332,67 @@ class PaperBot:
         return rows[:120]
 
 
+# --- viac účtov naraz ---------------------------------------------------------------
+
+def read_feed() -> tuple[Quote, dict] | None:
+    try:
+        f = json.loads(FEED.read_text())
+    except (OSError, json.JSONDecodeError):
+        return None
+    q = Quote(f["ts"], f["bid"], f["ask"], f.get("bid_hi"), f.get("ask_lo"),
+              f.get("bid_lo"), f.get("ask_hi"))
+    return q, f
+
+
+def run_all(bots: list[PaperBot], macro: MacroCalendar | None) -> None:
+    """Jeden feed, všetky virtuálne účty. Chyba jedného účtu ostatné nezastaví."""
+    for b in bots:
+        b.start()
+    threading.Thread(target=_push_all, args=(bots,), name="sb-push", daemon=True).start()
+    last_ts = 0.0
+    stale_logged = False
+    while True:
+        got = read_feed()
+        if got is not None:
+            q, f = got
+            if q.ts > last_ts:
+                last_ts = q.ts
+                stale_logged = False
+                for b in bots:
+                    b.feed = f
+                    try:
+                        b.step(q, f.get("swap_long") or 0.0, f.get("swap_short") or 0.0,
+                               int(f.get("swap_rollover_3days") or 3),
+                               bool(f.get("connected", True)))
+                    except Exception:  # noqa: BLE001
+                        log.exception("[%s] spracovanie kotácie zlyhalo", b.spec.name)
+            elif time.time() - q.ts > FEED_STALE_S and not stale_logged:
+                stale_logged = True
+                log.warning("Feed zo živého bota je starý %.0f s — čakám.",
+                            time.time() - q.ts)
+        if macro is not None:
+            macro.refresh()
+        for b in bots:
+            try:
+                b._prepare_snapshot()
+            except Exception:  # noqa: BLE001
+                log.exception("[%s] príprava snapshotu zlyhala", b.spec.name)
+        time.sleep(POLL_S)
+
+
+def _push_all(bots: list[PaperBot]) -> None:
+    while True:
+        for b in bots:
+            try:
+                b.push()
+            except Exception:  # noqa: BLE001
+                log.exception("[%s] push do Supabase zlyhal", b.spec.name)
+        time.sleep(PUSH_EVERY_S)
+
+
 # --- replay ----------------------------------------------------------------------
 
-def replay(start: str, end: str | None) -> int:
+def replay(start: str, end: str | None, spec: Virtual = VIRTUALS[0]) -> int:
     """Prehrá M5 sviečky z labu ako kotácie (open → extrémy → close) a vypíše
     výsledok — overenie, že virtuálny účet počíta ako lab."""
     import tempfile
@@ -364,7 +406,7 @@ def replay(start: str, end: str | None) -> int:
     bars = [b for b in bars if t0 <= b[0] < t1]
     spread = 0.00001
     with tempfile.TemporaryDirectory() as tmp:
-        bot = PaperBot(Path(tmp) / "replay.db", 15_200.0, None, None)
+        bot = PaperBot(Path(tmp) / "replay.db", 15_200.0, None, None, spec)
         peak, max_dd, min_ml = 15_200.0, 0.0, float("inf")
         for t, o, h, l, c in bars:
             day = datetime.fromtimestamp(t, timezone.utc).strftime("%Y-%m-%d")
@@ -392,7 +434,7 @@ def replay(start: str, end: str | None) -> int:
             "SELECT COUNT(*) n, SUM(pnl_usd) g, SUM(funding_usd) f, SUM(commission_usd) c "
             "FROM trades WHERE status='closed'").fetchone()
         rows = a.open_rows()
-        print(f"replay {start} → {end or 'koniec'}: {len(bars)} M5 barov")
+        print(f"replay {spec.name}: {start} → {end or 'koniec'}, {len(bars)} M5 barov")
         print(f"  cyklov {closed['n']}, hrubý {closed['g'] or 0:.0f}, swap uzavretých "
               f"{closed['f'] or 0:.0f}, provízie {closed['c'] or 0:.0f}")
         print(f"  zostatok {a.balance():.0f}, equity {eq:.0f} (výsledok {eq - 15_200:+.0f}), "
@@ -403,26 +445,33 @@ def replay(start: str, end: str | None) -> int:
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="Virtuálny bot Strážca")
+    ap = argparse.ArgumentParser(description="Virtuálne účty — súťažné stratégie")
     ap.add_argument("--replay", metavar="OD", help="prehrať históriu od dátumu (YYYY-MM-DD)")
     ap.add_argument("--until", metavar="DO", help="koniec prehrávania")
+    ap.add_argument("--strategy", metavar="ENV", default=VIRTUALS[0].env,
+                    help="pri --replay: env účtu z trading/paper_registry.py")
     args = ap.parse_args()
     logging.basicConfig(level=logging.WARNING if args.replay else logging.INFO,
                         format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     if args.replay:
-        return replay(args.replay, args.until)
+        spec = next((v for v in VIRTUALS if v.env == args.strategy), None)
+        if spec is None:
+            ap.error(f"neznámy účet {args.strategy}; sú: {', '.join(v.env for v in VIRTUALS)}")
+        return replay(args.replay, args.until, spec)
     from dotenv import load_dotenv   # na serveri je; replay ju nepotrebuje
     load_dotenv()
     PAPER_DIR.mkdir(parents=True, exist_ok=True)
     logging.getLogger().addHandler(logging.FileHandler(PAPER_DIR / "paper_bot.log"))
     capital = float(os.getenv("PAPER_CAPITAL", "15200"))
-    sync = SupabaseSync(env="paper")
     macro = MacroCalendar(PAPER_DIR / "ff_calendar.json")
-    bot = PaperBot(PAPER_DIR / "paper.db", capital, sync, macro)
-    log.info("Virtuálny bot štartuje — kapitál %.0f €, %s", bot.acct.capital,
-             bot.strat.status_line())
+    bots = []
+    for v in VIRTUALS:
+        b = PaperBot(PAPER_DIR / v.db, capital, SupabaseSync(env=v.env), macro, v)
+        bots.append(b)
+        log.info("Virtuálny účet %s (%s) — kapitál %.0f €, %s", v.name, v.env,
+                 b.acct.capital, b.strat.status_line())
     try:
-        bot.run()
+        run_all(bots, macro)
     except KeyboardInterrupt:
         log.info("Zastavené.")
         return 0
