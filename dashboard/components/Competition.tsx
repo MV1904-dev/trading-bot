@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Empty, Section } from "@/components/ui";
 import { pnlClass, signed } from "@/lib/format";
+import { STRATEGY_INFO } from "@/lib/strategyInfo";
 import type { BotState, Position } from "@/lib/types";
 
 /**
@@ -24,7 +25,7 @@ export type StateRow = BotState & { env: string };
 // live neutrálne, virtuálne účty v poradí štartu
 const PALETTE = ["#7c3aed", "#0891b2", "#d97706", "#db2777", "#65a30d", "#4f46e5"];
 
-export type Account = { env: string; name: string; color: string; start: string | null };
+export type Account = { env: string; name: string; color: string; start: string | null; note?: string };
 
 export function accountsOf(states: StateRow[]): Account[] {
   const virt = states.filter((s) => s.env.startsWith("paper"))
@@ -32,6 +33,7 @@ export function accountsOf(states: StateRow[]): Account[] {
       env: s.env,
       name: (s.config?.strategy_name as string) || s.env,
       start: (s.config?.started_at as string) ?? null,
+      note: (s.config?.strategy_note as string) || undefined,
     }))
     .sort((a, b) => (a.start ?? "").localeCompare(b.start ?? ""));
   const live = states.some((s) => s.env === "live")
@@ -45,6 +47,7 @@ export default function Competition({ accounts, trades, positions, start, onStar
   accounts: Account[]; trades: TradeRow[]; positions: PosRow[];
   start: string | null; onStart: (s: string) => void;
 }) {
+  const [open, setOpen] = useState<string | null>(null);
   const virt = accounts.filter((a) => a.start);
   if (!virt.length || !start) {
     return (
@@ -98,7 +101,7 @@ export default function Competition({ accounts, trades, positions, start, onStar
             simuluje cTrader na živých cenách: spread, TP medzi kotáciami, provízia
             0,526 €, swap podľa sadzieb live účtu, marža len z väčšej strany,
             stop-out pri 50 %. Okno sa dá posunúť na štart iného účtu. Poradie
-            podľa výsledku.
+            podľa výsledku. Ťuknutím na účet sa ukáže, ako jeho stratégia funguje.
           </>
         }
       >
@@ -117,8 +120,13 @@ export default function Competition({ accounts, trades, positions, start, onStar
         )}
 
         <ol className="overflow-hidden rounded-lg bg-surface">
-          {rows.map((r, i) => (
-            <li key={r.acc.env} className={`px-3 py-2.5 ${i ? "border-t border-hair" : ""}`}>
+          {rows.map((r, i) => {
+            const info = STRATEGY_INFO[r.acc.env];
+            const isOpen = open === r.acc.env;
+            return (
+            <li key={r.acc.env} className={i ? "border-t border-hair" : ""}>
+              <button onClick={() => setOpen(isOpen ? null : r.acc.env)} aria-expanded={isOpen}
+                      className="block w-full px-3 py-2.5 text-left hover:bg-hair/40">
               <div className="flex items-baseline gap-2">
                 <span className="w-4 text-xs text-faint tabular-nums">{i + 1}.</span>
                 <span className="inline-block h-2.5 w-2.5 shrink-0 rounded-full"
@@ -127,6 +135,11 @@ export default function Competition({ accounts, trades, positions, start, onStar
                 <span className={`num ml-auto text-[15px] font-semibold ${pnlClass(r.result)}`}>
                   {r.first ? `${signed(r.result, 0)} €` : "—"}
                 </span>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                     strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
+                     className={`shrink-0 self-center text-faint transition-transform ${isOpen ? "rotate-180" : ""}`}>
+                  <path d="m6 9 6 6 6-6" />
+                </svg>
               </div>
               <div className="mt-0.5 pl-[42px] text-[11px] leading-relaxed text-faint">
                 {r.first ? (
@@ -139,8 +152,27 @@ export default function Competition({ accounts, trades, positions, start, onStar
                   </>
                 ) : "čaká na prvý vstup"}
               </div>
+              </button>
+              {isOpen && (
+                <div className="mx-3 mb-3 rounded-lg bg-bg px-3 py-2.5 text-[13px] leading-relaxed">
+                  {info ? (
+                    <>
+                      <p className="text-ink">{info.idea}</p>
+                      <p className="mt-2 text-xs font-semibold text-muted">Ako to funguje</p>
+                      <ol className="mt-1 list-decimal space-y-1 pl-5 text-muted">
+                        {info.how.map((h) => <li key={h}>{h}</li>)}
+                      </ol>
+                      <p className="mt-2 text-xs font-semibold text-muted">Na čo si dať pozor</p>
+                      <p className="mt-0.5 text-muted">{info.watch}</p>
+                    </>
+                  ) : (
+                    <p className="text-muted">{r.acc.note ?? "Popis tejto stratégie zatiaľ chýba."}</p>
+                  )}
+                </div>
+              )}
             </li>
-          ))}
+            );
+          })}
         </ol>
       </Section>
 
