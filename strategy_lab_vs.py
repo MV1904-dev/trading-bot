@@ -371,7 +371,12 @@ class GuardedGrid:
 
     def __init__(self, step_l=0.0015, step_s=0.0015, tp=0.001, cap=20, cap_ct=6,
                  fast=50, slow=200, guard=None, band=None, unlock_atr=True,
-                 step_ct=None):
+                 step_ct=None, catchup=None):
+        # Dobeh zmeškaných úrovní (návrh Mariána 16. 10. 2026): keď kurz
+        # v jednom bare preskočí k ≥ 2 krokov, otvorí sa k pozícií naraz
+        # (po strop). "tp01" = všetky s TP +0,1 %, "ladder" = TP po
+        # preskočených úrovniach (ako by ich mal postupný grid).
+        self.catchup = catchup
         self.step_ct = step_ct
         self.step = {"long": step_l, "short": step_s}
         self.tp, self.cap, self.cap_ct = tp, cap, cap_ct
@@ -426,14 +431,23 @@ class GuardedGrid:
                 need = max(need, 2 * self.atr)
             unlock = (not self.unlock_atr) or n < 20 or abs(c - self.last[side]) > 2 * self.atr
             if move >= need and unlock:
-                gap = int(move / (ref * st)) >= 2
+                k = int(move / (ref * st))
+                gap = k >= 2
+                extra = 0
+                if self.catchup and gap:
+                    extra = min(k, cap - n) - 1
+                sgn = 1 if side == "long" else -1
+                tp = round(c * (1 + sgn * st) if gap else c * (1 + sgn * self.tp), 5)
+                a.open(side, c, tp, None, i)
+                for j in range(extra):
+                    if self.catchup == "ladder":
+                        tpj = round(c * (1 + sgn * st * (j + 2)), 5)
+                    else:
+                        tpj = round(c * (1 + sgn * self.tp), 5)
+                    a.open(side, c, tpj, None, i)
                 if side == "long":
-                    tp = round(c * (1 + st) if gap else c * (1 + self.tp), 5)
-                    a.open("long", c, tp, None, i)
                     self.last["long"] = self.ref["long"] = c + SPREAD
                 else:
-                    tp = round(c * (1 - st) if gap else c * (1 - self.tp), 5)
-                    a.open("short", c, tp, None, i)
                     self.last["short"] = self.ref["short"] = c
 
 
@@ -482,20 +496,20 @@ def _guard():
     return Real(GuardGrid())
 
 
+def _gg(**kw):
+    return lambda: GuardedGrid(band=B, step_l=0.0010, step_s=0.0010, step_ct=0.0020,
+                               cap_ct=4, fast=100, slow=400, **kw)
+
+
 CANDIDATES = {
     # (stratégia, násobok veľkosti pozície). 40k varianty: otázka zo
     # 16. 10. 2026, či nie je lepšie jedna 40k pozícia než štyri 10k.
     # Nie je — pri rovnakej max. expozícii sústredí stratu do 0,5 % pásma
     # a pri trende účet zlikviduje (rok 1: 4 036 zásahov stop-outu).
     "G2B live (extrém)": (lambda: G2B(), 1),
-    "Strážca 10k (beží)": (lambda: GuardedGrid(band=B, step_l=0.0010, step_s=0.0010,
-                            step_ct=0.0020, cap_ct=4, fast=100, slow=400), 1),
-    "40k, rovnaké kroky, strop 5/1": (lambda: GuardedGrid(band=B, step_l=0.0010, step_s=0.0010,
-                            step_ct=0.0020, cap=5, cap_ct=1, fast=100, slow=400), 4),
-    "40k každý 4. krok, strop 5/1": (lambda: GuardedGrid(band=B, step_l=0.0040, step_s=0.0040,
-                            step_ct=0.0080, cap=5, cap_ct=1, fast=100, slow=400), 4),
-    "40k, rovnaké kroky, strop 20/4": (lambda: GuardedGrid(band=B, step_l=0.0010, step_s=0.0010,
-                            step_ct=0.0020, cap_ct=4, fast=100, slow=400), 4),
+    "Strážca (beží)": (_gg(), 1),
+    "Strážca + dobeh, TP +0,1 %": (_gg(catchup="tp01"), 1),
+    "Strážca + dobeh, TP po úrovniach": (_gg(catchup="ladder"), 1),
 }
 
 
