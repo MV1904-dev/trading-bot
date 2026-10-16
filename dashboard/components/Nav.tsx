@@ -35,7 +35,7 @@ function EnvToggle() {
 /** Hlavné položky sa vojdú bez orezania popisku; História a Stratégie sa
     len prezerajú, nevyžadujú dennú akciu, tak idú pod „ďalšie". */
 const MAIN = [
-  { href: "/", label: "Bot", icon: BotMark, mark: true },
+  { href: "/", label: "Prehľad", icon: HomeIcon },
   { href: "/pnl", label: "P/L", icon: ChartIcon },
   { href: "/mapa", label: "Mapa", icon: MapIcon },
   { href: "/calendar", label: "Kalendár", icon: CalendarIcon },
@@ -56,25 +56,32 @@ export default function Nav() {
     <>
       <header className="safe-top sticky top-0 z-10 border-b border-hair bg-bg/90 backdrop-blur">
         <div className="mx-auto flex max-w-5xl items-center gap-1 px-4 py-2">
+          {/* Značka aplikácie na každej stránke; na mobile za ňou názov
+              stránky, na desktope ho nesie zvýraznená položka navigácie. */}
+          <Link href="/" className="mr-1.5 flex items-center gap-2 text-[17px] sm:mr-4 font-bold tracking-tight text-ink">
+            <BotMark size={26} />
+            Bot
+          </Link>
           <nav className="hidden flex-1 gap-1 sm:flex">
             {all.map((l) => (
               <Link
                 key={l.href}
                 href={l.href}
-                className={`flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-sm transition-colors ${
+                className={`rounded-md px-2.5 py-1.5 text-sm transition-colors ${
                   path === l.href
                     ? "bg-surface text-ink"
                     : "text-muted hover:text-ink"
                 }`}
               >
-                {"mark" in l && <BotMark size={16} />}
                 {l.label}
               </Link>
             ))}
           </nav>
-          <span className="flex flex-1 items-center gap-2 text-sm font-medium sm:hidden">
-            {path === "/" && <BotMark size={20} />}
-            {all.find((l) => l.href === path)?.label ?? "Trading bot"}
+          <span className="flex-1 truncate text-[15px] text-muted sm:hidden">
+            {(() => {
+              const label = all.find((l) => l.href === path)?.label;
+              return label ? `— ${label}` : null;
+            })()}
           </span>
           <EnvToggle />
           <ThemeToggle />
@@ -147,11 +154,15 @@ const S = {
   strokeLinejoin: "round" as const,
 };
 
+function HomeIcon() {
+  return <svg {...S}><path d="M3 10.5 12 3l9 7.5" /><path d="M5 10v10h14V10" /></svg>;
+}
+
 /** Znak aplikácie — rovnaký ako favicon (app/icon1.tsx): short, kotva, long. */
 function BotMark({ size = 20 }: { size?: number }) {
   return (
     <svg width={size} height={size} viewBox="0 0 32 32" aria-hidden className="shrink-0">
-      <rect width="32" height="32" rx="7" fill="#0b0b0e" />
+      <rect x="0.5" y="0.5" width="31" height="31" rx="6.5" fill="#0b0b0e" stroke="#ffffff" strokeOpacity={0.14} />
       <rect x="6" y="6" width="20" height="4" rx="2" fill="#4f9cf5" />
       <rect x="4" y="14" width="24" height="4" rx="2" fill="#f4f4f5" />
       <rect x="6" y="22" width="20" height="4" rx="2" fill="#2fc48d" />
