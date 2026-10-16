@@ -76,6 +76,7 @@ class Acct:
     max_dd: float = 0.0
     min_ml: float = math.inf
     last_eq: float = CAPITAL
+    mult: float = 1.0          # veľkosť pozície v násobkoch 10 000
     _last_t: float | None = None
 
     def n(self, side: str) -> int:
@@ -84,12 +85,12 @@ class Acct:
     def open(self, side: str, bid: float, tp, sl, i: int, tag="") -> None:
         entry = bid + SPREAD if side == "long" else bid
         self.pos.append(P(side, entry, tp, sl, i, tag))
-        self.comm += COMMISSION
+        self.comm += COMMISSION * self.mult
 
     def close(self, p: P, price: float) -> None:
         self.pos.remove(p)
         diff = price - p.entry if p.side == "long" else p.entry - price
-        pnl = diff * QTY / price
+        pnl = diff * QTY * self.mult / price
         self.realized += pnl
         self.cycles += 1
         if pnl > 0:
@@ -102,12 +103,12 @@ class Acct:
 
     def floating(self, bid: float) -> float:
         ask = bid + SPREAD
-        return sum((bid - p.entry) * QTY / bid if p.side == "long"
-                   else (p.entry - ask) * QTY / ask for p in self.pos)
+        return self.mult * sum((bid - p.entry) * QTY / bid if p.side == "long"
+                               else (p.entry - ask) * QTY / ask for p in self.pos)
 
     def used(self) -> float:
         nl = self.n("long")
-        return max(nl, len(self.pos) - nl) * QTY / LEVERAGE
+        return max(nl, len(self.pos) - nl) * QTY * self.mult / LEVERAGE
 
     def equity(self, bid: float) -> float:
         return self.capital + self.realized - self.comm + self.swap + self.floating(bid)
@@ -126,7 +127,7 @@ class Acct:
                 mult = 3 if d.weekday() == 2 else 1
                 for p in self.pos:
                     pa = -long_pa if p.side == "long" else short_pa
-                    self.swap += pa / 100 / 365 * QTY * mult
+                    self.swap += pa / 100 / 365 * QTY * mult * self.mult
             d += timedelta(days=1)
 
     def stop_out(self, bid: float) -> None:
@@ -168,9 +169,9 @@ class Acct:
         }
 
 
-def run(bars, strat, name: str) -> Acct:
+def run(bars, strat, name: str, mult: float = 1.0) -> Acct:
     """Spoločná slučka: swap → TP/SL v sviečke → stop-out → stratégia."""
-    a = Acct(name)
+    a = Acct(name, mult=mult)
     for i, (t, o, h, l, c) in enumerate(bars):
         a.rollover(t)
         for p in [p for p in a.pos if p.bar < i]:
@@ -482,11 +483,19 @@ def _guard():
 
 
 CANDIDATES = {
-    "G2B live (extrém)": lambda: G2B(),
-    "GG 20/4 .10 ct.20 100/400": lambda: GuardedGrid(
-        band=B, step_l=0.0010, step_s=0.0010, step_ct=0.0020, cap_ct=4,
-        fast=100, slow=400),
-    "Strážca (trading/strategy_guard.py)": _guard,
+    # (stratégia, násobok veľkosti pozície). 40k varianty: otázka zo
+    # 16. 10. 2026, či nie je lepšie jedna 40k pozícia než štyri 10k.
+    # Nie je — pri rovnakej max. expozícii sústredí stratu do 0,5 % pásma
+    # a pri trende účet zlikviduje (rok 1: 4 036 zásahov stop-outu).
+    "G2B live (extrém)": (lambda: G2B(), 1),
+    "Strážca 10k (beží)": (lambda: GuardedGrid(band=B, step_l=0.0010, step_s=0.0010,
+                            step_ct=0.0020, cap_ct=4, fast=100, slow=400), 1),
+    "40k, rovnaké kroky, strop 5/1": (lambda: GuardedGrid(band=B, step_l=0.0010, step_s=0.0010,
+                            step_ct=0.0020, cap=5, cap_ct=1, fast=100, slow=400), 4),
+    "40k každý 4. krok, strop 5/1": (lambda: GuardedGrid(band=B, step_l=0.0040, step_s=0.0040,
+                            step_ct=0.0080, cap=5, cap_ct=1, fast=100, slow=400), 4),
+    "40k, rovnaké kroky, strop 20/4": (lambda: GuardedGrid(band=B, step_l=0.0010, step_s=0.0010,
+                            step_ct=0.0020, cap_ct=4, fast=100, slow=400), 4),
 }
 
 
@@ -502,10 +511,11 @@ def main() -> int:
                         ("2. rok (10/2025–10/2026)", y2),
                         ("live obdobie (od 6. 8. 2026)", live)):
         rows = []
-        for name, mk in CANDIDATES.items():
+        for name, spec in CANDIDATES.items():
             if only and not any(o in name for o in only):
                 continue
-            rows.append(run(data, mk(), name).row())
+            mk, mult = spec if isinstance(spec, tuple) else (spec, 1)
+            rows.append(run(data, mk(), name, mult).row())
         table(rows, title)
     return 0
 
