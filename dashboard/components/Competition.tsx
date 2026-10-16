@@ -101,7 +101,7 @@ export default function Competition({ accounts, trades, positions, start, onStar
             simuluje cTrader na živých cenách: spread, TP medzi kotáciami, provízia
             0,526 €, swap podľa sadzieb live účtu, marža len z väčšej strany,
             stop-out pri 50 %. Okno sa dá posunúť na štart iného účtu. Poradie
-            podľa výsledku. Ťuknutím na účet sa ukáže, ako jeho stratégia funguje.
+            podľa výsledku. Ťuknutím na účet sa ukážu pravidlá jeho stratégie — čo bot kedy urobí a prečo.
           </>
         }
       >
@@ -157,13 +157,26 @@ export default function Competition({ accounts, trades, positions, start, onStar
                 <div className="mx-3 mb-3 rounded-lg bg-bg px-3 py-2.5 text-[13px] leading-relaxed">
                   {info ? (
                     <>
-                      <p className="text-ink">{info.idea}</p>
-                      <p className="mt-2 text-xs font-semibold text-muted">Ako to funguje</p>
-                      <ol className="mt-1 list-decimal space-y-1 pl-5 text-muted">
-                        {info.how.map((h) => <li key={h}>{h}</li>)}
+                      <p className="text-ink">{info.summary}</p>
+                      <ol className="mt-2 space-y-2">
+                        {info.rules.map((rule, k) => (
+                          <li key={k} className="rounded-md border border-hair px-2.5 py-2">
+                            <p className="text-xs font-semibold text-ink">
+                              <span className="mr-1 text-faint tabular-nums">{k + 1}.</span>
+                              Kedy: <span className="font-normal">{rule.when}</span>
+                            </p>
+                            <p className="mt-1 text-xs text-ink">
+                              <span className="font-semibold">Čo urobí:</span> {rule.what}
+                            </p>
+                            <p className="mt-1 text-xs text-muted">
+                              <span className="font-semibold">Prečo:</span> {rule.why}
+                            </p>
+                          </li>
+                        ))}
                       </ol>
-                      <p className="mt-2 text-xs font-semibold text-muted">Na čo si dať pozor</p>
-                      <p className="mt-0.5 text-muted">{info.watch}</p>
+                      <p className="mt-2 text-xs text-muted">
+                        <span className="font-semibold text-warn">Riziko:</span> {info.risk}
+                      </p>
                     </>
                   ) : (
                     <p className="text-muted">{r.acc.note ?? "Popis tejto stratégie zatiaľ chýba."}</p>

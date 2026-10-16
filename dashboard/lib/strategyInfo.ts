@@ -1,66 +1,156 @@
 /**
- * Popisy stratégií pre Súťaž — „tak, aby to pochopilo aj malé dieťa"
- * (zadanie 17. 10. 2026). Kľúč je env účtu v Supabase. Nová stratégia
- * bez popisu tu ukáže aspoň krátku poznámku z registra (config.strategy_note).
+ * Pravidlá stratégií pre Súťaž — „čo kedy bot urobí a prečo" (zadanie
+ * 17. 10. 2026). Každé pravidlo zodpovedá kódu:
+ *   live, paper-grid, paper-dobeh — trading/strategy_grid25.py (kotva na
+ *     bežiacom extréme), swapové kroky bot_ctrader._apply_swap_regime,
+ *     dobeh trading/strategy_grid_virtual.py
+ *   paper (Strážca) — trading/strategy_guard.py
+ * Kľúč je env účtu v Supabase. Pri zmene stratégie treba zmeniť aj text.
  */
 
+export type Rule = { when: string; what: string; why: string };
+
 export type StrategyInfo = {
-  idea: string;            // jedna veta: celá stratégia v skratke
-  how: string[];           // ako to funguje, krok po kroku
-  watch: string;           // na čo si dať pozor
+  summary: string;
+  rules: Rule[];
+  risk: string;
 };
 
-/** Spoločný základ všetkých troch gridov — rebrík. */
-const LADDER =
-  "Predstav si, že cena eura je loptička, ktorá skáče hore a dole. Bot si okolo nej " +
-  "postaví rebrík s malými schodíkmi.";
+const CHECK: Rule = {
+  when: "Každých 10 sekúnd a na konci každej 5-minútovej sviečky",
+  what: "Prečíta kurz. O nových vstupoch rozhoduje len na konci 5-minútovej sviečky, podľa jej zatváracej ceny.",
+  why: "Jedno rozhodnutie za 5 minút bráni tomu, aby jeden rýchly výkyv otvoril viac pozícií naraz.",
+};
+
+const tp = (gap: string): Rule => ({
+  when: "Hneď pri otvorení pozície",
+  what: `Položí u brokera príkaz na zatvorenie so ziskom (TP) o 0,1 % ďalej — pri 10 000 € je to ≈ 10 € hrubého zisku. ${gap}`,
+  why: "TP leží u brokera, takže sa zatvorí aj vtedy, keď bot práve nebeží.",
+});
+const TP = tp("Ak kurz pri vstupe preskočil 2 a viac krokov, TP je o jeden krok (0,15 % long, 0,10 % short).");
+
+const NO_SL: Rule = {
+  when: "Pozícia je v strate",
+  what: "Nezatvára ju. Drží ju, kým kurz nedôjde k TP.",
+  why: "Stratégia stavia na tom, že EURUSD sa v pásme 1,12–1,16 väčšinou vracia. Stop-loss by stratu zrealizoval skôr, než sa kurz vráti.",
+};
+
+const BLACKOUT: Rule = {
+  when: "30 minút pred a 30 minút po dôležitej správe pre USD alebo EUR (kalendár ForexFactory, vysoký dopad)",
+  what: "Neotvára žiadne nové pozície. Otvorené pozície a ich TP ostávajú.",
+  why: "Pri správach kurz skáče a spread sa rozširuje — vstup by padol na náhodnej cene.",
+};
+
+const BROKER: Rule = {
+  when: "Úroveň marže klesne na 50 %",
+  what: "Broker sám zatvára pozície od najstratovejšej, kým marža nie je znova nad 50 % (stop-out).",
+  why: "Pravidlo brokera, nie bota — chráni účet pred záporným zostatkom.",
+};
+
+/** Pravidlá live gridu — rovnaké pre live, jeho kópiu aj variant s dobehom. */
+const GRID_RULES: Rule[] = [
+  CHECK,
+  {
+    when: "Kurz klesne o krok pod najvyššiu cenu od posledného longu (dnes krok 0,15 %) a zároveň aspoň o 2× ATR",
+    what: "Kúpi 10 000 € (long) — ak je kurz pod 1,16 a otvorených longov je menej ako 30. Nad 20 longov len vtedy, ak je kurz od posledného longu ďalej než 2× ATR.",
+    why: "Kupuje lacnejšie po poklese a čaká na odraz. ATR (priemerný rozsah 5-min sviečky) zabráni vstupom, keď je trh príliš rozkolísaný na daný krok.",
+  },
+  {
+    when: "Kurz stúpne o krok nad najnižšiu cenu od posledného shortu (dnes krok 0,10 %)",
+    what: "Predá 10 000 € (short) — ak je kurz nad 1,12 a otvorených shortov je menej ako 30 (nad 20 len pri odstupe > 2× ATR).",
+    why: "Zrkadlo longu: predáva drahšie po raste a čaká na pokles. Obe strany bežia naraz.",
+  },
+  {
+    when: "Po každom vstupe",
+    what: "Ďalší krok počíta od ceny tohto vstupu a odtiaľ znova sleduje najvyšší (long) / najnižší (short) kurz.",
+    why: "Pri kmitaní tak môže ďalší vstup prísť aj bližšie než o celý krok od predošlého — preto má live pozície niekedy len 4–6 pipov od seba.",
+  },
+  TP,
+  NO_SL,
+  {
+    when: "Pri každej zmene swapových sadzieb u brokera",
+    what: "Prepočíta, koľko stojí strana za noc pri 10 000 €: do 0,25 € → krok 0,10 %, do 0,50 € → 0,13 %, do 1,00 € → 0,15 %, viac → strana sa neotvára. Dnes long platí ~0,65 €/noc → 0,15 %, short dostáva → 0,10 %.",
+    why: "Drahšie držanie = redšie vstupy, aby pozície nečakali v strate dlho za vysoký poplatok.",
+  },
+  BLACKOUT,
+  BROKER,
+];
 
 export const STRATEGY_INFO: Record<string, StrategyInfo> = {
   live: {
-    idea: `${LADDER} Na každom schodíku kúpi alebo predá kúsok a keď sa loptička kúsok vráti, zoberie si malú odmenu.`,
-    how: [
-      "Keď cena spadne o jeden schodík (0,10–0,15 %), bot kúpi kúsok za 10 000 €. Keď potom vyskočí o 0,1 % hore, kúsok predá a zostane mu asi 10 € navyše.",
-      "Naopak to robí tiež: keď cena vyskočí o schodík, bot „predá dopredu“ (short) a keď spadne o 0,1 %, kúpi späť a zase má asi 10 €.",
-      "Robí to na oboch stranách naraz, takže zarába, keď loptička skáče sem a tam.",
-      "Schodík sa meria od najvyššieho bodu, kam cena od posledného nákupu došla — preto pri malom kmitaní nakupuje aj bližšie za sebou.",
-      "Nikdy nepredá so stratou. Keď cena ide proti nemu, kúsok si nechá a trpezlivo čaká, kým sa vráti.",
-      "Pod 1,12 už nepredáva dopredu a nad 1,16 už nekupuje. Na každej strane má najviac 30 kúskov.",
-      "Ako veľké sú schodíky, rozhoduje cena za noc (swap): čím je držanie drahšie, tým väčší schodík.",
-    ],
-    watch: "Keď loptička dlho padá alebo stúpa jedným smerom, bot nazbiera veľa kúskov v mínuse a čaká. Za držanie kúpených kúskov sa každú noc platí malý poplatok a ak by strata narástla príliš, broker kúsky zatvorí sám (pri marži 50 %).",
+    summary: "Obojstranný grid na skutočnom účte: kupuje po poklese, predáva po raste, každú pozíciu zatvára so ziskom ~10 € a stratové drží bez stop-lossu.",
+    rules: GRID_RULES,
+    risk: "Keď kurz ide dlho jedným smerom, pribúdajú pozície v strate (až 30) a čakajú — longy pritom každú noc platia swap. Live si nesie aj pozície otvorené pred súťažou.",
   },
   paper: {
-    idea: `${LADDER} Strážca sa ale navyše pozerá na „počasie“ — či cena dlhšie ide hore alebo dole — a proti silnému vetru veľa nenakupuje.`,
-    how: [
-      "Funguje ako obyčajný rebrík: kúsok kúpi pri poklese, predá pri raste o 0,1 % a zoberie si asi 10 €.",
-      "Počasie zistí tak, že porovná priemernú cenu za posledné ~4 dni s priemerom za ~17 dní. Keď je kratší priemer vyššie, fúka vietor hore, keď nižšie, fúka dole.",
-      "V smere vetra pracuje naplno: schodík 0,10 % a najviac 20 kúskov.",
-      "Proti vetru je opatrný: schodík je dvakrát väčší (0,20 %) a najviac 4 kúsky. Takže keď cena dlho padá, nenahromadí si kopu kúskov v mínuse.",
-      "Má aj vlastnú poistku: keď by marža klesla pod 110 %, sám zavrie najhorší kúsok — skôr, než by to pri 50 % urobil broker.",
-      "Rovnako ako live: pod 1,12 nepredáva dopredu, nad 1,16 nekupuje.",
+    summary: "Ten istý grid, ale podľa trendu obmedzuje stranu, ktorá ide proti nemu: proti trendu najviac 4 pozície s dvojnásobným krokom.",
+    rules: [
+      CHECK,
+      {
+        when: "Na konci každej hodiny",
+        what: "Spočíta kĺzavý priemer (EMA) hodinových zatváracích cien za 100 hodín (~4 dni) a za 400 hodín (~17 dní). Keď je 100-hodinový vyššie, trend je HORE, inak DOLE.",
+        why: "Dlhšie priemery nereagujú na krátke výkyvy — ukazujú, kam trh ide už niekoľko dní.",
+      },
+      {
+        when: "Kurz klesne pod najvyššiu cenu od posledného longu o 0,10 % (trend HORE) alebo o 0,20 % (trend DOLE), a aspoň o 2× ATR",
+        what: "Kúpi 10 000 € — ak je kurz pod 1,16 a longov je menej ako 20 (trend HORE) alebo menej ako 4 (trend DOLE).",
+        why: "V smere trendu nakupuje hustejšie, proti nemu len málo a riedko — aby sa pri dlhom páde nenahromadila kopa stratových longov.",
+      },
+      {
+        when: "Kurz stúpne nad najnižšiu cenu od posledného shortu o 0,10 % (trend DOLE) alebo o 0,20 % (trend HORE)",
+        what: "Predá 10 000 € — ak je kurz nad 1,12 a shortov je menej ako 20 (trend DOLE) alebo menej ako 4 (trend HORE).",
+        why: "Zrkadlo longov: shorty naplno, keď trh klesá, a opatrne, keď rastie.",
+      },
+      {
+        when: "Trend sa otočí",
+        what: "Otvorené pozície nechá s ich TP. Mení sa len to, koľko nových pozícií a s akým krokom smie otvoriť.",
+        why: "Zatvárať pri každom otočení by znamenalo realizovať straty pri každom falošnom signále.",
+      },
+      tp("Ak kurz pri vstupe preskočil 2 a viac krokov, TP je o jeden krok (0,10 % v smere trendu, 0,20 % proti nemu)."),
+      {
+        when: "Pozícia je v strate",
+        what: "Nezatvára ju, drží ju do TP — s jednou výnimkou nižšie.",
+        why: "Rovnako ako live grid stavia na návrate kurzu v pásme.",
+      },
+      {
+        when: "Úroveň marže klesne pod 110 %",
+        what: "Zatvorí pozíciu s najväčšou stratou, a ak treba, ďalšiu, kým marža nie je znova nad 110 %.",
+        why: "Vlastná poistka: zatvorí najhoršie pozície skôr, než by to pri 50 % urobil broker plošne.",
+      },
+      BLACKOUT,
+      BROKER,
     ],
-    watch: "Keď sa vietor často otáča, Strážca môže byť chvíľu „na zlej strane“ a zarobí menej ako obyčajný grid. Výmenou za to by pri dlhom páde mal mať oveľa menšiu stratu.",
+    risk: "Keď sa trend často otáča, býva na „zlej“ strane a zarobí menej než obyčajný grid. Výmenou by pri dlhom pohybe jedným smerom mal mať oveľa menšiu stratu (lab: max prepad 7,7k oproti 12,6k).",
   },
   "paper-grid": {
-    idea: `${LADDER} Toto je presná kópia live gridu, len na virtuálnom účte, ktorý začal prázdny.`,
-    how: [
-      "Robí úplne to isté, čo live: rovnaké schodíky, rovnaké pásmo 1,12–1,16, najviac 30 kúskov na stranu, rovnaká zmena schodíkov podľa swapu.",
-      "Rozdiel je len v tom, že začal s čistým účtom — nemá staré kúsky, ktoré live nazbieral pred súťažou.",
-      "Slúži ako meradlo: ukazuje, ako by sa darilo pravidlám live gridu, keby začínali dnes.",
-      "Keď ho porovnáš s „Grid + dobeh“, vidíš presne, čo pridá samotný dobeh — všetko ostatné majú rovnaké.",
+    summary: "Presná kópia live gridu na virtuálnom účte, ktorý začal prázdny — meradlo pre ostatné varianty.",
+    rules: [
+      ...GRID_RULES,
+      {
+        when: "Štart súťaže",
+        what: "Začal bez pozícií s 15 200 €. Kurz a swapové sadzby dostáva zo živého bota; plnenia, provízie a swap sa simulujú podľa live účtu.",
+        why: "Ukazuje, ako by dopadli pravidlá live gridu bez starých pozícií. Rozdiel oproti „Grid + dobeh“ je čistý efekt dobehu.",
+      },
     ],
-    watch: "Je to merací prútik, nie nová stratégia. Ak sa od live líši, je to preto, že live si nesie staré pozície a má skutočné plnenie u brokera.",
+    risk: "Rovnaké ako live grid. Odchýlka od live je spôsobená starými pozíciami live účtu a skutočným plnením u brokera.",
   },
   "paper-dobeh": {
-    idea: `${LADDER} Keď cena preskočí naraz viac schodíkov, tento grid si všetky zmeškané schodíky dobehne naraz.`,
-    how: [
-      "Väčšinu času robí to isté ako kópia live gridu.",
-      "Niekedy však cena skočí o viac schodíkov naraz — napríklad pri dôležitej správe, keď bot pol hodinu čaká a nenakupuje (blackout).",
-      "Obyčajný grid by potom kúpil len jeden kúsok a zvyšné schodíky preskočil.",
-      "Tento kúpi toľko kúskov, koľko schodíkov cena preskočila (najviac 6) — a všetky za tú lepšiu cenu, ktorú cena po skoku ponúka.",
-      "Každý z nich predá pri návrate o 0,1 %. Keď sa cena vráti, zoberie naraz napríklad 4 × 10 € namiesto 10 €.",
-      "Ráta len schodíky vnútri pásma 1,12–1,16 — keď sa cena vráti do pásma zvonku, nedobieha nič.",
+    summary: "Kópia live gridu s jedným pravidlom navyše: keď kurz preskočí naraz viac krokov, otvorí všetky zmeškané pozície naraz.",
+    rules: [
+      ...GRID_RULES.slice(0, 3),
+      {
+        when: "Pri vstupe kurz prešiel od kotvy naraz 2 a viac krokov (napr. po blackoute alebo prudkom pohybe)",
+        what: "Namiesto jednej otvorí toľko pozícií po 10 000 €, koľko krokov kurz preskočil — najviac 6 a najviac do stropu 30. Všetky majú TP +0,1 % od aktuálneho kurzu. Rátajú sa len kroky vnútri pásma 1,12–1,16.",
+        why: "Postupný grid by na tých krokoch otvoril pozície tiež, len za horšie ceny. Takto má tú istú expozíciu za lepšiu cenu. Kroky mimo pásma sa nedobiehajú, lebo tie grid vynechal zámerne.",
+      },
+      ...GRID_RULES.slice(3).map((r) => (r === TP
+        ? tp("Aj pri dobehu majú všetky pozície TP +0,1 % od aktuálneho kurzu.") : r)),
+      {
+        when: "Štart súťaže",
+        what: "Začal bez pozícií s 15 200 €, v rovnakom čase ako kópia live gridu.",
+        why: "Rozdiel oproti „Grid (kópia live)“ je spôsobený len dobehom.",
+      },
     ],
-    watch: "Keď cena po skoku pokračuje ďalej rovnakým smerom, má v mínuse viac kúskov naraz. Či sa dobeh oplatí, ukáže práve táto súťaž.",
+    risk: "Keď kurz po skoku pokračuje ďalej rovnakým smerom, má v strate naraz viac pozícií (až 6 namiesto 1). Lab za 2 roky: o ~1,8k menej než kópia, v 2. roku o 0,6k viac — blackouty lab nevie modelovať, rozhodne súťaž.",
   },
 };
