@@ -2,23 +2,22 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Empty, Section } from "@/components/ui";
-import { money, pnlClass, signed } from "@/lib/format";
+import { pnlClass, signed } from "@/lib/format";
 import type { BotState, Position } from "@/lib/types";
 
 /**
  * Súťaž: živý grid proti všetkým virtuálnym účtom (paper_bot.py).
  *
- * Všetky účty sa porovnávajú v tom istom okne — od zvoleného štartu
- * (predvolene štart najmladšieho účtu, aby mali všetci rovnaké podmienky).
- * Výsledok = equity teraz − equity na začiatku okna (prvý 5-min snapshot
- * v okne). Equity = zostatok + float, bez naakumulovaného swapu otvorených
- * pozícií — ten by live penalizoval za pozície spred súťaže; swap sa do
- * výsledku dostane, keď sa pozícia zavrie. Live si nesie staré pozície,
- * virtuálne účty začali prázdne s 15 200 €.
+ * Porovnáva sa KOHORTA — len pozície, ktoré daný účet otvoril od štartu
+ * okna. Live si nesie pozície spred súťaže a ich zisk aj float by výsledok
+ * skresľovali (zadanie 16. 10. 2026: „porovnanie od ďalšej pozície, ktorú
+ * stratégia otvorí ako prvú"), takže sa do neho nepočítajú vôbec.
+ *
+ * Výsledok = čistý zisk uzavretých obchodov kohorty (po províziách a swape)
+ * + float a naakumulovaný swap jej otvorených pozícií.
  */
 
-export type Snap = { env: string; ts: string; equity: number };
-export type TradeRow = { env: string; pnl_usd: number | null; closed_at: string };
+export type TradeRow = { env: string; pnl_usd: number | null; opened_at: string; closed_at: string };
 export type PosRow = Position & { env: string };
 export type StateRow = BotState & { env: string };
 
@@ -40,9 +39,11 @@ export function accountsOf(states: StateRow[]): Account[] {
   return [...live, ...virt.map((v, i) => ({ ...v, color: PALETTE[i % PALETTE.length] }))];
 }
 
-export default function Competition({ accounts, states, trades, positions, snaps, start, onStart }: {
-  accounts: Account[]; states: StateRow[]; trades: TradeRow[]; positions: PosRow[];
-  snaps: Snap[]; start: string | null; onStart: (s: string) => void;
+const ms = (iso: string) => Date.parse(iso);
+
+export default function Competition({ accounts, trades, positions, start, onStart }: {
+  accounts: Account[]; trades: TradeRow[]; positions: PosRow[];
+  start: string | null; onStart: (s: string) => void;
 }) {
   const virt = accounts.filter((a) => a.start);
   if (!virt.length || !start) {
@@ -54,6 +55,7 @@ export default function Competition({ accounts, states, trades, positions, snaps
       </main>
     );
   }
+  const t0 = ms(start);
 
   // okná porovnania = rôzne časy štartu (účty spustené naraz zdieľajú jedno)
   const starts = Object.entries(virt.reduce<Record<string, string[]>>((m, v) => {
@@ -65,39 +67,21 @@ export default function Competition({ accounts, states, trades, positions, snaps
     { day: "numeric", month: "numeric", hour: "2-digit", minute: "2-digit", timeZone: "Europe/Bratislava" });
 
   const rows = accounts.map((acc) => {
-    const st = states.find((s) => s.env === acc.env) ?? null;
-    const pos = positions.filter((p) => p.env === acc.env);
-    const tr = trades.filter((t) => t.env === acc.env);
-    const sn = snaps.filter((s) => s.env === acc.env);
-    const eqNow = st?.equity != null ? Number(st.equity) : null;
-    // Účet, ktorý v okne ešte nemá snapshot, ale štartoval presne na jeho
-    // začiatku, začína na vklade.
-    const eqStart = sn.length ? sn[0].equity
-      : acc.start && acc.start >= start ? Number(st?.deposits_net ?? 0) || null : null;
-    const result = eqNow != null && eqStart != null ? eqNow - eqStart : null;
-    let peak = -Infinity, dd = 0;
-    for (const v of [...sn.map((s) => s.equity), ...(eqNow != null ? [eqNow] : [])]) {
-      peak = Math.max(peak, v);
-      dd = Math.max(dd, peak - v);
-    }
-    const qL = pos.filter((p) => p.side === "long").reduce((a, p) => a + Number(p.qty), 0);
-    const qS = pos.filter((p) => p.side === "short").reduce((a, p) => a + Number(p.qty), 0);
+    const tr = trades.filter((t) => t.env === acc.env && ms(t.opened_at) >= t0);
+    const pos = positions.filter((p) => p.env === acc.env && ms(p.opened_at) >= t0);
+    const realized = tr.reduce((a, t) => a + (Number(t.pnl_usd) || 0), 0);
+    const floating = pos.reduce((a, p) => a + (Number(p.pnl_float) || 0), 0);
     const swap = pos.reduce((a, p) => a + (Number(p.funding_usd) || 0), 0);
-    const usedSum = Number(st?.used_margin) || 0;
-    const used = qL + qS > 0 ? (usedSum * Math.max(qL, qS)) / (qL + qS) : 0;
-    const eqTrue = st?.balance != null ? Number(st.balance) + Number(st.floating_pnl ?? 0) + swap : null;
+    const first = [...tr.map((t) => t.opened_at), ...pos.map((p) => p.opened_at)].sort()[0] ?? null;
     return {
-      acc,
-      result,
-      pct: result != null && eqStart ? (result / eqStart) * 100 : null,
-      realized: tr.reduce((a, t) => a + (Number(t.pnl_usd) || 0), 0),
+      acc, realized, floating: floating + swap, first,
+      result: realized + floating + swap,
       cycles: tr.length,
-      dd: sn.length ? dd : null,
+      losses: tr.filter((t) => (Number(t.pnl_usd) || 0) < 0).length,
       longs: pos.filter((p) => p.side === "long").length,
       shorts: pos.filter((p) => p.side === "short").length,
-      ml: eqTrue != null && used > 0 ? (eqTrue / used) * 100 : null,
     };
-  }).sort((a, b) => (b.result ?? -Infinity) - (a.result ?? -Infinity));
+  }).sort((a, b) => b.result - a.result);
 
   return (
     <main>
@@ -106,14 +90,15 @@ export default function Competition({ accounts, states, trades, positions, snaps
         meta={`od ${fmt(start)}`}
         info={
           <>
-            Živý grid proti stratégiám na virtuálnych účtoch. Virtuálny účet verne
+            Živý grid proti stratégiám na virtuálnych účtoch. Každý účet sa hodnotí
+            len podľa pozícií, ktoré otvoril od štartu okna — staré pozície live
+            (spred súťaže) sa nepočítajú vôbec, ani ich zisk, ani float. Výsledok je
+            čistý zisk uzavretých obchodov (po províziách a swape) plus float
+            a swap pozícií, ktoré sú z nich ešte otvorené. Virtuálny účet verne
             simuluje cTrader na živých cenách: spread, TP medzi kotáciami, provízia
             0,526 €, swap podľa sadzieb live účtu, marža len z väčšej strany,
-            stop-out pri 50 %. Všetci sa porovnávajú v tom istom okne — od štartu
-            zvoleného účtu (predvolene najmladšieho). Výsledok je zmena equity
-            v okne; equity je zostatok + float bez swapu otvorených pozícií (ten by
-            live penalizoval za pozície spred súťaže). Live si nesie staré pozície,
-            virtuálne účty začali prázdne s 15 200 €. Poradie podľa výsledku.
+            stop-out pri 50 %. Okno sa dá posunúť na štart iného účtu. Poradie
+            podľa výsledku.
           </>
         }
       >
@@ -140,26 +125,27 @@ export default function Competition({ accounts, states, trades, positions, snaps
                       style={{ background: r.acc.color }} />
                 <span className="truncate text-sm font-medium">{r.acc.name}</span>
                 <span className={`num ml-auto text-[15px] font-semibold ${pnlClass(r.result)}`}>
-                  {r.result == null ? "—" : `${signed(r.result, 0)} €`}
-                </span>
-                <span className={`num w-16 text-right text-xs ${pnlClass(r.pct)}`}>
-                  {r.pct == null ? "" : `${signed(r.pct)} %`}
+                  {r.first ? `${signed(r.result, 0)} €` : "—"}
                 </span>
               </div>
               <div className="mt-0.5 pl-[42px] text-[11px] leading-relaxed text-faint">
-                realiz. <span className={`num ${pnlClass(r.realized)}`}>{signed(r.realized, 0)}</span>
-                {" · "}{r.cycles} cyklov
-                {" · "}prepad <span className="num">{r.dd == null ? "—" : money(r.dd, 0)}</span>
-                {" · "}marža <span className="num">{r.ml == null ? "—" : `${r.ml.toFixed(0)} %`}</span>
-                {" · "}<span className="num">{r.longs}L/{r.shorts}S</span>
+                {r.first ? (
+                  <>
+                    realiz. <span className={`num ${pnlClass(r.realized)}`}>{signed(r.realized, 0)}</span>
+                    {" · "}float <span className={`num ${pnlClass(r.floating)}`}>{signed(r.floating, 0)}</span>
+                    {" · "}{r.cycles} cyklov{r.losses ? ` (${r.losses} so stratou)` : ""}
+                    {" · "}otvorené <span className="num">{r.longs}L/{r.shorts}S</span>
+                    {" · "}prvý vstup {fmt(r.first)}
+                  </>
+                ) : "čaká na prvý vstup"}
               </div>
             </li>
           ))}
         </ol>
       </Section>
 
-      <Section title="Zmena equity v okne">
-        <EquityChart accounts={accounts} snaps={snaps} states={states} start={start} />
+      <Section title="Realizovaný zisk od štartu">
+        <RealizedChart accounts={accounts} trades={trades} t0={t0} />
       </Section>
     </main>
   );
@@ -178,34 +164,41 @@ function useWidth() {
   return [ref, w] as const;
 }
 
-function EquityChart({ accounts, snaps, states, start }: {
-  accounts: Account[]; snaps: Snap[]; states: StateRow[]; start: string;
+/** Kumulatívny čistý zisk uzavretých obchodov kohorty — schodíky po
+    každom zavretí. Float sa nekreslí: jeho históriu pre live nemáme. */
+function RealizedChart({ accounts, trades, t0 }: {
+  accounts: Account[]; trades: TradeRow[]; t0: number;
 }) {
   const [box, W] = useWidth();
-  const H = 210, PL = 44, PR = 8, PT = 10, PB = 22;
+  const H = 200, PL = 44, PR = 8, PT = 10, PB = 22;
+  const [now] = useState(() => Date.now());
 
   const series = useMemo(() => {
     const out: Record<string, { t: number; v: number }[]> = {};
     for (const acc of accounts) {
-      const sn = snaps.filter((s) => s.env === acc.env);
-      if (!sn.length) continue;
-      const st = states.find((s) => s.env === acc.env);
-      const base = acc.start && acc.start >= start && st?.deposits_net
-        ? Number(st.deposits_net) : sn[0].equity;
-      const k = Math.max(1, Math.ceil(sn.length / 300));   // ~300 bodov stačí
-      out[acc.env] = sn.filter((_, i) => i % k === 0 || i === sn.length - 1)
-        .map((s) => ({ t: Date.parse(s.ts), v: s.equity - base }));
+      const tr = trades.filter((t) => t.env === acc.env && ms(t.opened_at) >= t0)
+        .sort((a, b) => a.closed_at.localeCompare(b.closed_at));
+      let cum = 0;
+      const pts = [{ t: t0, v: 0 }];
+      for (const t of tr) {
+        const at = ms(t.closed_at);
+        pts.push({ t: at, v: cum });
+        cum += Number(t.pnl_usd) || 0;
+        pts.push({ t: at, v: cum });
+      }
+      pts.push({ t: Math.max(now, pts[pts.length - 1].t), v: cum });
+      out[acc.env] = pts;
     }
     return out;
-  }, [accounts, snaps, states, start]);
+  }, [accounts, trades, t0, now]);
 
   const all = Object.values(series).flat();
-  if (all.length < 2) {
-    return <Empty>Graf sa zaplní po prvých snapshotoch (každých 5 minút).</Empty>;
+  if (!trades.some((t) => ms(t.opened_at) >= t0)) {
+    return <Empty>Graf sa zaplní po prvých uzavretých obchodoch.</Empty>;
   }
-  const t0 = Math.min(...all.map((p) => p.t)), t1 = Math.max(...all.map((p) => p.t));
+  const t1 = Math.max(...all.map((p) => p.t));
   let lo = Math.min(0, ...all.map((p) => p.v)), hi = Math.max(0, ...all.map((p) => p.v));
-  const pad = (hi - lo) * 0.08 || 50;
+  const pad = (hi - lo) * 0.08 || 20;
   lo -= pad; hi += pad;
   const x = (t: number) => PL + ((t - t0) / Math.max(1, t1 - t0)) * (W - PL - PR);
   const y = (v: number) => PT + ((hi - v) / (hi - lo)) * (H - PT - PB);
@@ -213,7 +206,7 @@ function EquityChart({ accounts, snaps, states, start }: {
     pts.map((p, i) => `${i ? "L" : "M"}${x(p.t).toFixed(1)} ${y(p.v).toFixed(1)}`).join(" ");
 
   const span = hi - lo;
-  const step = [50, 100, 250, 500, 1000, 2500, 5000].find((s) => span / s <= 4) ?? 10_000;
+  const step = [10, 25, 50, 100, 250, 500, 1000, 2500, 5000].find((s) => span / s <= 4) ?? 10_000;
   const ticks: number[] = [];
   for (let v = Math.ceil(lo / step) * step; v <= hi; v += step) ticks.push(v);
   const days: number[] = [];
@@ -225,7 +218,7 @@ function EquityChart({ accounts, snaps, states, start }: {
   return (
     <div ref={box} className="w-full">
       <svg width={W} height={H} className="block" role="img"
-           aria-label="Zmena equity všetkých účtov v okne súťaže">
+           aria-label="Kumulatívny realizovaný zisk účtov od štartu súťaže">
         {ticks.map((v) => (
           <g key={v}>
             <line x1={PL} x2={W - PR} y1={y(v)} y2={y(v)}
@@ -239,8 +232,8 @@ function EquityChart({ accounts, snaps, states, start }: {
             {new Date(d).toLocaleDateString("sk-SK", { day: "numeric", month: "numeric" })}
           </text>
         ))}
-        {accounts.map((acc) => (series[acc.env]?.length ?? 0) > 1 && (
-          <path key={acc.env} d={path(series[acc.env])} fill="none" stroke={acc.color}
+        {accounts.map((acc) => (
+          <path key={acc.env} d={path(series[acc.env] ?? [])} fill="none" stroke={acc.color}
                 strokeWidth={1.75} strokeLinejoin="round" />
         ))}
       </svg>
