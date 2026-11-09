@@ -19,6 +19,19 @@ CID=$(grep '^CTRADER_CLIENT_ID=' .env | cut -d= -f2)
 CSEC=$(grep '^CTRADER_CLIENT_SECRET=' .env | cut -d= -f2)
 [ -n "$CID" ] && [ -n "$CSEC" ] || { echo "CHYBA: chýba CLIENT_ID/SECRET v .env."; exit 1; }
 
+# Bežiaci bot si .env prepisuje sám, takže ctrader_live_promote.sh sa
+# odmietne spustiť — lenže to je AŽ PO tom, čo si vymenil jednorazový kód
+# z prehliadača. Grant tým nezhorí (tokeny sa uložia), ale človek si myslí,
+# že je hotovo, a overenie mu potom hlási starý mŕtvy token: presne to sa
+# stalo 9. 11. 2026 a stálo to dve kolá. Preto sa pýtame hneď na začiatku.
+if command -v systemctl >/dev/null 2>&1 \
+   && systemctl is-active --quiet ctrader-bot 2>/dev/null; then
+  echo "⛔ ctrader-bot BEŽÍ — najprv 'systemctl stop ctrader-bot'." >&2
+  echo "   Inak sa prepnutie tokenov po grante odmietne a kód" >&2
+  echo "   z prehliadača (platí ~minútu) medzitým prepadne." >&2
+  exit 1
+fi
+
 CODE="${1:-}"
 if [ -z "$CODE" ]; then
   echo "1) Otvor v prehliadači:"

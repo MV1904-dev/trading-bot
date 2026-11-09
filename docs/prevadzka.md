@@ -140,6 +140,13 @@ ssh -t hetzner 'cd /home/marian/trading-bot && sudo -u marian ./scripts/ctrader_
 ssh hetzner 'systemctl start ctrader-bot'
 ```
 
+**Poradie je dôležité:** bot musí byť zastavený už pred grantom, nie až
+pred prepnutím. Bežiaci bot si `.env` prepisuje sám, takže `promote` sa
+odmietne — ale až potom, čo si už vymenil jednorazový kód. Tokeny síce
+ostanú uložené bokom, lenže overenie medzitým hlási starý mŕtvy token
+a vyzerá to, že grant zlyhal (9. 11. 2026 to stálo dve kolá). Grant sa
+preto odmietne spustiť, kým služba beží.
+
 Grant vypíše odkaz, v prehliadači treba **povoliť aj live účet**; kód z
 presmerovania platí asi minútu. `ssh -t` je podstatné — bez pridelenej
 konzoly sa skript nemá koho na kód spýtať. Keď terminál nie je (agent,
