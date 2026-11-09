@@ -48,7 +48,14 @@ from trading.broker_ctrader import CTraderBroker
 TIMEOUT = 20.0
 
 
-def check(label: str, demo: bool, cid: str, secret: str, token: str) -> bool:
+# Výsledok jednej brány. "token" je vlastný stav zámerne: app auth prejde
+# aj s mŕtvym access tokenom (overuje len aplikáciu), takže bez neho záver
+# hlásil „oba endpointy odpovedajú → problém bol prechodný" v okamihu, keď
+# bol token neplatný a bolo treba nový grant (9. 11. 2026).
+OK, TOKEN, FAIL = "ok", "token", "fail"
+
+
+def check(label: str, demo: bool, cid: str, secret: str, token: str) -> str:
     # account_id="" → connect() sa zastaví hneď po app authe, čo je presne
     # to, čo chceme zmerať (account auth už závisí od tokenu aj účtu).
     broker = CTraderBroker(cid, secret, token, "", demo=demo)
@@ -57,25 +64,25 @@ def check(label: str, demo: bool, cid: str, secret: str, token: str) -> bool:
         broker.connect(timeout=TIMEOUT)
     except Exception as exc:  # noqa: BLE001 — diagnostika, zaujíma nás všetko
         print(f"  ❌ app auth ZLYHAL: {exc}")
-        return False
+        return FAIL
     print("  ✅ app auth OK")
     if not token:
         print("     (zoznam účtov preskakujem — bez access tokenu)")
-        return True
+        return OK
     try:
         accounts = broker.account_list()
     except Exception as exc:  # noqa: BLE001
         print(f"  ⚠️  zoznam účtov sa nedal načítať: {exc}")
-        return True
+        return TOKEN if "ACCESS_TOKEN" in str(exc).upper() else OK
     if not accounts:
         print("  ⚠️  access token nemá priradený ŽIADNY účet "
               "(prepadol grant? treba nový OAuth grant)")
-        return True
+        return TOKEN
     for a in accounts:
         kind = "LIVE" if a["isLive"] else "demo"
         print(f"     účet {a['ctidTraderAccountId']} ({kind}), "
               f"login {a['traderLogin']}")
-    return True
+    return OK
 
 
 def main() -> int:
@@ -119,9 +126,12 @@ def main() -> int:
         print("CHYBA: v .env chýba CTRADER_CLIENT_ID / CLIENT_SECRET.",
               file=sys.stderr)
         return 2
+    # Návratové kódy nesú stav aj rodičovi: 0 = v poriadku, 3 = aplikácia
+    # je v poriadku, ale token je mŕtvy, 1 = neprešiel ani app auth.
+    EXIT = {OK: 0, TOKEN: 3, FAIL: 1}
     if args.only:
-        return 0 if check(args.only.upper(), args.only == "demo",
-                          cid, secret, token) else 1
+        return EXIT[check(args.only.upper(), args.only == "demo",
+                          cid, secret, token)]
 
     want_demo = os.getenv("CTRADER_DEMO", "1") != "0"
     print(f"CTRADER_DEMO={'1' if want_demo else '0'} → bot beží proti "
@@ -140,15 +150,27 @@ def main() -> int:
     env["CTRADER_ACCESS_TOKEN"] = token
     me = str(Path(__file__).resolve())
 
-    def run(which: str) -> bool:
-        return subprocess.run([sys.executable, me, "--only", which],
-                              env=env).returncode == 0
+    def run(which: str) -> str:
+        code = subprocess.run([sys.executable, me, "--only", which],
+                              env=env, check=False).returncode
+        return {0: OK, 3: TOKEN}.get(code, FAIL)
 
-    ok_demo = run("demo")
-    ok_live = run("live")
+    res_demo, res_live = run("demo"), run("live")
+    ok_demo, ok_live = res_demo != FAIL, res_live != FAIL
 
     print("\n--- záver ---")
-    if ok_demo and ok_live:
+    if TOKEN in (res_demo, res_live):
+        print("Aplikácia je v poriadku (app auth prejde), ale ACCESS TOKEN")
+        print("je neplatný — práve preto sa bot nepripojí. App auth overuje")
+        print("len aplikáciu, token až zoznam účtov, takže zelené „app auth")
+        print("OK\" o tokene nehovorí nič.")
+        print("Treba nový OAuth grant so zastaveným botom:")
+        print("  systemctl stop ctrader-bot")
+        print("  scripts/ctrader_live_grant.sh      (povoliť aj LIVE účet)")
+        print("  scripts/ctrader_live_promote.sh")
+        print("  systemctl start ctrader-bot")
+        print("Podrobne: docs/prevadzka.md, časť „Ak vypršali tokeny\".")
+    elif ok_demo and ok_live:
         print("Oba endpointy odpovedajú → aplikácia je v poriadku a problém")
         print("bol prechodný (alebo je inde: account auth / token / účet).")
     elif ok_demo and not ok_live:
