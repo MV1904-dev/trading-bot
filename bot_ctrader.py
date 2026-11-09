@@ -80,8 +80,26 @@ class CTraderBotConfig:
     QTY: float = 10_000
     CAP_BASE: int = 20             # lab G2B kapacita 20+10
     CAP_RESERVE: int = 10
-    STEP_SHORT: float = 0.0015     # lab G2B geometria
-    STEP_LONG: float = 0.00225
+    # Kroky sú zlomok ceny, nie pipy: trigger = kotva × krok. 0,000448 je
+    # pri 1,1150 presne 5,0 pipu (pri 1,1000 asi 4,9) — zadanie Mariána
+    # 9. 11. 2026. Lab G2B geometria bola 0,0015 / 0,00225.
+    STEP_SHORT: float = field(
+        default_factory=lambda: float(os.getenv("CTRADER_STEP_SHORT", "0.0015")))
+    STEP_LONG: float = field(
+        default_factory=lambda: float(os.getenv("CTRADER_STEP_LONG", "0.000448")))
+    # Spodná poistka kroku je atr_mult × ATR a tá istá hodnota drží minimálny
+    # odstup od posledného vstupu nad CAP_BASE pozíciami. Pri ATR 0,00028
+    # a násobku 2 je to 5,6 pipu — viac než 5-pipový krok, takže by krok
+    # úplne prevalcovala A ZÁROVEŇ by nad 20 longami nepustila ani jeden
+    # vstup. Násobok 1 dáva 2,8 pipu, čiže krok rozhoduje.
+    ATR_MULT: float = field(
+        default_factory=lambda: float(os.getenv("CTRADER_ATR_MULT", "1.0")))
+    # Long sa drží zapnutý aj keď swapová tabuľka hovorí „neotvárať".
+    # Vedomé prebitie poistky: 9. 11. 2026 stál long 1,19 €/noc na pozíciu
+    # a automatika ho vypla. CTRADER_FORCE_LONG=0 vráti rozhodnutie
+    # automatike. Short si automatika riadi ďalej bez ohľadu na toto.
+    FORCE_LONG: bool = field(
+        default_factory=lambda: os.getenv("CTRADER_FORCE_LONG", "1") != "0")
     # Swapová automatika krokov (CTRADER_SWAP_AUTO=0 vypne, vtedy platia
     # STEP_SHORT/STEP_LONG konštanty vyššie): každá strana dostane krok
     # podľa VLASTNÉHO nákladu na držanie v €/deň pri aktuálnej QTY
@@ -96,11 +114,14 @@ class CTraderBotConfig:
     BAND_LOW: float = field(
         default_factory=lambda: float(os.getenv("CTRADER_BAND_LOW", "1.1200")))
     BAND_HIGH: float = field(
-        default_factory=lambda: float(os.getenv("CTRADER_BAND_HIGH", "1.1600")))
-    # Kotva gridu: "extreme" (bežiace max/min, takto live obchoduje) alebo
-    # "entry" (#16, posledný vstup). Viď Grid25Config.anchor.
+        default_factory=lambda: float(os.getenv("CTRADER_BAND_HIGH", "1.1150")))
+    # Kotva gridu: "entry" (#16, posledný vstup) alebo "extreme" (bežiace
+    # max/min). Pri "extreme" kotvu stiahne každý medzipohyb, takže odstup
+    # vstupov je menší než krok — s 5-pipovým krokom by vychádzal 2,8–5
+    # pipu. Zadanie „každých 5 pipov" preto drží len kotva na vstupe.
+    # CTRADER_GRID_ANCHOR=extreme vráti pôvodné správanie.
     GRID_ANCHOR: str = field(
-        default_factory=lambda: os.getenv("CTRADER_GRID_ANCHOR", "extreme"))
+        default_factory=lambda: os.getenv("CTRADER_GRID_ANCHOR", "entry"))
     SWAP_TIERS: tuple = (
         (0.25, 0.0010),   # náklad ≤ 0,25 €/deň → krok ±0,10 %
         (0.50, 0.0013),   # ≤ 0,50 €/deň        → krok ±0,13 %
@@ -181,6 +202,7 @@ class CTraderBot:
                                    step_long=cfg.STEP_LONG,
                                    band_low=cfg.BAND_LOW,
                                    band_high=cfg.BAND_HIGH,
+                                   atr_mult=cfg.ATR_MULT,
                                    anchor=cfg.GRID_ANCHOR))
         grid.id = "Grid25-G2B-CT"
         # Swapová automatika si kroky pamätá v DB — po reštarte musia
@@ -1127,6 +1149,10 @@ class CTraderBot:
         cost_l = self._swap_cost_eur_day(cur_l, mid)
         step_s = self._swap_tier(cost_s)
         step_l = self._swap_tier(cost_l)
+        # Vynútený long ignoruje tabuľku nákladov aj jej krok — drží si
+        # vlastný z konfigurácie. Short ostáva na automatike.
+        if self.cfg.FORCE_LONG:
+            step_l = self.cfg.STEP_LONG
 
         g = self.strategy.cfg
         cur_state = (g.step_short if g.short_enabled else None,
@@ -1143,13 +1169,15 @@ class CTraderBot:
         self.db.meta_set("grid_steps", f"{step_s or 0}|{step_l or 0}")
 
         def _fmt(side: str, swap: float, cost: float,
-                 step: float | None) -> str:
-            krok = f"krok ±{step:.2%}" if step is not None else "⛔ NEOTVÁRAŤ"
+                 step: float | None, forced: bool = False) -> str:
+            krok = f"krok ±{step:.3%}" if step is not None else "⛔ NEOTVÁRAŤ"
+            if forced:
+                krok += " (vynútené, tabuľku neberie)"
             return (f"{side}: swap {swap:+.4f} → náklad {cost:.2f} €/deň "
                     f"→ {krok}")
         msg = ("⚖️ Grid kroky podľa swapov (na {:,.0f}):\n".format(self.cfg.QTY)
                + _fmt("short", cur_s, cost_s, step_s) + "\n"
-               + _fmt("long", cur_l, cost_l, step_l))
+               + _fmt("long", cur_l, cost_l, step_l, self.cfg.FORCE_LONG))
         self.tg.send(msg)
         self.db.log_event("info",
                           f"grid kroky: short {step_s or 'VYP'} "

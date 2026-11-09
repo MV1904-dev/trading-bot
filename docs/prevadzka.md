@@ -99,8 +99,13 @@ cd dashboard && npm install && npm run build && npm run start   # http://localho
 | `CTRADER_ACCOUNT_ID` | `48184979` = live účet (login 2079276) |
 | `CTRADER_DEMO` | `0` = live, `1` = demo (vlastná DB aj Telegram prefix) |
 | `CTRADER_QTY` | objem na vstup v jednotkách |
-| `CTRADER_BAND_LOW` | pod touto cenou sa **neotvárajú shorty** (default 1,1250) |
-| `CTRADER_BAND_HIGH` | nad touto cenou sa **neotvárajú longy** (default 1,1600) |
+| `CTRADER_BAND_LOW` | pod touto cenou sa **neotvárajú shorty** (default 1,1200) |
+| `CTRADER_BAND_HIGH` | nad touto cenou sa **neotvárajú longy** (default 1,1150) |
+| `CTRADER_STEP_LONG` | krok long ako zlomok ceny (default 0,000448 = 5,0 pipu pri 1,1150) |
+| `CTRADER_STEP_SHORT` | krok short ako zlomok ceny (default 0,0015; riadi ho swapová automatika) |
+| `CTRADER_ATR_MULT` | násobok ATR pre spodnú poistku kroku a minimálny odstup nad CAP_BASE (default 1,0) |
+| `CTRADER_FORCE_LONG` | `1` drží long zapnutý aj proti swapovej tabuľke; `0` vráti rozhodnutie automatike |
+| `CTRADER_GRID_ANCHOR` | `entry` = kotva na poslednom vstupe (default), `extreme` = bežiace max/min |
 | `CTRADER_SWAP_AUTO` | `0` vypne automatiku krokov podľa swapov |
 | `CTRADER_GRID_ANCHOR` | kotva gridu: `extreme` (default, bežiace max/min — takto live obchoduje) alebo `entry` (#16, posledný vstup) |
 | `PAPER_CAPITAL` | štartovací kapitál virtuálneho účtu (default 15 200 €) — platí len pri prvom štarte, potom je v `data/paper/paper.db` |
@@ -174,6 +179,12 @@ alebo odmietnutia `PGRST`.
   zneplatnia refresh tokeny. `run_bot_ctrader.sh` preto lokálny beh blokuje.
 - **Spotware drží jedno app-auth spojenie naraz.** Diagnostické skripty preto
   púšťaj so zastaveným botom, ak chceš dôveryhodný výsledok.
+- **Krok, ATR a kapacita sa ovplyvňujú.** Spodná poistka kroku je
+  `atr_mult × ATR` a tá istá hodnota drží minimálny odstup od posledného
+  vstupu nad `CAP_BASE` pozíciami. Pri ATR 0,00028 a násobku 2 je to
+  5,6 pipu, takže krok menší než 5,6 pipu sa neprejaví **a zároveň** nad
+  20 pozíciami neprejde ani jeden vstup. Kto zmenšuje krok, musí zmenšiť
+  aj `CTRADER_ATR_MULT`.
 - **Geometria gridu.** Lab overil len G2B (krok 0,15 % / 0,225 %). Automatika
   podľa swapov nastavuje hustejšie kroky — je to vedomý experiment, nie
   lab-validovaný stav.
