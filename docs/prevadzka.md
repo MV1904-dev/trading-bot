@@ -101,6 +101,8 @@ cd dashboard && npm install && npm run build && npm run start   # http://localho
 | `CTRADER_QTY` | objem na vstup v jednotkách |
 | `CTRADER_BAND_LOW` | pod touto cenou sa **neotvárajú shorty** (default 1,1200) |
 | `CTRADER_BAND_HIGH` | nad touto cenou sa **neotvárajú longy** (default 1,1150) |
+| `CTRADER_CAP_BASE` | kapacita na stranu pred rezervou (default 30) |
+| `CTRADER_CAP_RESERVE` | rezervné úrovne nad `CAP_BASE` (default 15, spolu 45) |
 | `CTRADER_STEP_LONG` | krok long ako zlomok ceny (default 0,000448 = 5,0 pipu pri 1,1150) |
 | `CTRADER_STEP_SHORT` | krok short ako zlomok ceny (default 0,0015; riadi ho swapová automatika) |
 | `CTRADER_ATR_MULT` | násobok ATR pre spodnú poistku kroku a minimálny odstup nad CAP_BASE (default 1,0) |
@@ -179,6 +181,11 @@ alebo odmietnutia `PGRST`.
   zneplatnia refresh tokeny. `run_bot_ctrader.sh` preto lokálny beh blokuje.
 - **Spotware drží jedno app-auth spojenie naraz.** Diagnostické skripty preto
   púšťaj so zastaveným botom, ak chceš dôveryhodný výsledok.
+- **Skutočný strop nie je kapacita, ale marža.** Keď nie je voľná marža,
+  broker príkaz odmietne, nech je `CAP_BASE`+`CAP_RESERVE` akékoľvek.
+  Pri plnom strope grid prestane obchodovať úplne — 18. 11. 2026 stál
+  šesť dní na 30/30, hoci kurz prešiel cez štyridsať 5-pipových úrovní,
+  a swapy bežali ďalej.
 - **Krok, ATR a kapacita sa ovplyvňujú.** Spodná poistka kroku je
   `atr_mult × ATR` a tá istá hodnota drží minimálny odstup od posledného
   vstupu nad `CAP_BASE` pozíciami. Pri ATR 0,00028 a násobku 2 je to

@@ -78,8 +78,17 @@ class CTraderBotConfig:
     DEMO: bool = True              # natvrdo; live = vedomá zmena + env potvrdenie
     SYMBOL: str = "EURUSD"
     QTY: float = 10_000
-    CAP_BASE: int = 20             # lab G2B kapacita 20+10
-    CAP_RESERVE: int = 10
+    # Kapacita na stranu. Lab G2B mal 20+10; zdvihnuté na 30+15 (zadanie
+    # Mariána 18. 11. 2026) — pri plnom strope grid prestal obchodovať
+    # úplne, hoci kurz prešiel cez štyridsať 5-pipových úrovní, a swapy
+    # bežali ďalej. POZOR: skutočný strop je marža, nie toto číslo. Keď
+    # nie je voľná marža, broker príkaz odmietne, nech je kapacita
+    # akákoľvek. CAP_BASE navyše určuje, odkiaľ platí minimálny odstup
+    # od posledného vstupu (atr_mult × ATR).
+    CAP_BASE: int = field(
+        default_factory=lambda: int(os.getenv("CTRADER_CAP_BASE", "30")))
+    CAP_RESERVE: int = field(
+        default_factory=lambda: int(os.getenv("CTRADER_CAP_RESERVE", "15")))
     # Kroky sú zlomok ceny, nie pipy: trigger = kotva × krok. 0,000448 je
     # pri 1,1150 presne 5,0 pipu (pri 1,1000 asi 4,9) — zadanie Mariána
     # 9. 11. 2026. Lab G2B geometria bola 0,0015 / 0,00225.
